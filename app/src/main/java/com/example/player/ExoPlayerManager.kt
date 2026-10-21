@@ -161,15 +161,39 @@ class ExoPlayerManager(private val context: Context) {
     }
 
     fun playStream(stream: StreamSource, forceLowQuality: Boolean = false) {
-        val player = getPlayer()
-        _currentStream.value = stream
-        _errorMessage.value = null
-        _isBuffering.value = true
+        if (stream.url.isBlank()) {
+            _isBuffering.value = false
+            _errorMessage.value = "Stream URL is empty. Please select another server."
+            return
+        }
+        try {
+            val player = getPlayer()
+            _currentStream.value = stream
+            _errorMessage.value = null
+            _isBuffering.value = true
 
-        val mediaSource = createMediaSource(stream, forceLowQuality)
-        player.setMediaSource(mediaSource)
-        player.prepare()
-        player.playWhenReady = true
+            player.trackSelectionParameters = if (forceLowQuality) {
+                player.trackSelectionParameters
+                    .buildUpon()
+                    .setMaxVideoSizeSd()
+                    .setMaxVideoBitrate(800_000)
+                    .build()
+            } else {
+                player.trackSelectionParameters
+                    .buildUpon()
+                    .clearVideoSizeConstraints()
+                    .setMaxVideoBitrate(Int.MAX_VALUE)
+                    .build()
+            }
+
+            val mediaSource = createMediaSource(stream, forceLowQuality)
+            player.setMediaSource(mediaSource)
+            player.prepare()
+            player.playWhenReady = true
+        } catch (e: Exception) {
+            _isBuffering.value = false
+            _errorMessage.value = "Failed to initialize stream: ${e.localizedMessage ?: "Invalid URL"}"
+        }
     }
 
     private fun createMediaSource(stream: StreamSource, forceLowQuality: Boolean): MediaSource {

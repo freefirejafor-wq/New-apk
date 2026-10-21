@@ -3,6 +3,8 @@ package com.example.data.repository
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.model.*
+import com.example.data.util.MskianLiveCricketFetcher
+import com.example.data.util.TeamFlagResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,6 +14,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -50,11 +57,15 @@ class SportsStreamRepository(private val context: Context) {
         if (savedConfigJson != null) {
             try {
                 val obj = JSONObject(savedConfigJson)
+                val rawTitle = obj.optString("appTitle", "SportzX Live TV")
+                val resolvedTitle = if (rawTitle.equals("Football Live Tv", ignoreCase = true)) "SportzX Live TV" else rawTitle
+                val rawAnnounce = obj.optString("announcement", "Welcome to SportzX Live TV! Multiple high-definition stream servers are active.")
+                val resolvedAnnounce = rawAnnounce.replace("Football Live TV", "SportzX Live TV", ignoreCase = true)
                 _config.value = AppConfig(
-                    appTitle = obj.optString("appTitle", "Football Live Tv"),
-                    version = obj.optString("version", "7.3"),
-                    announcement = obj.optString("announcement", "Welcome to Football Live TV! Multiple high-definition stream servers are active."),
-                    telegramLink = obj.optString("telegramLink", "https://t.me/football_live_tv"),
+                    appTitle = resolvedTitle,
+                    version = obj.optString("version", "8.0"),
+                    announcement = resolvedAnnounce,
+                    telegramLink = obj.optString("telegramLink", "https://t.me/sports_live_streams"),
                     adminPin = obj.optString("adminPin", "1234"),
                     forceLowQuality = obj.optBoolean("forceLowQuality", false),
                     isHardwareAccelerationEnabled = obj.optBoolean("isHardwareAccelerationEnabled", true),
@@ -66,10 +77,12 @@ class SportsStreamRepository(private val context: Context) {
             }
         }
 
-        val savedMatchesJson = prefs.getString("saved_matches", null)
+        val savedMatchesJson = prefs.getString("saved_matches_v10_senior_intl", null)
         if (savedMatchesJson != null) {
             try {
-                val list = deserializeMatches(savedMatchesJson)
+                val list = deserializeMatches(savedMatchesJson).filter {
+                    TeamFlagResolver.isSeniorInternationalMatch(it.team1Name, it.team2Name, it.tournament)
+                }
                 if (list.isNotEmpty()) {
                     _matches.value = list
                 } else {
@@ -118,7 +131,7 @@ class SportsStreamRepository(private val context: Context) {
                 put("autoSyncOnLaunch", _config.value.autoSyncOnLaunch)
             }
             prefs.edit()
-                .putString("saved_matches", matchesJson)
+                .putString("saved_matches_v10_senior_intl", matchesJson)
                 .putString("saved_channels", channelsJson)
                 .putString("app_config", configObj.toString())
                 .apply()
@@ -225,6 +238,8 @@ class SportsStreamRepository(private val context: Context) {
                     so.put("url", s.url)
                     so.put("quality", s.quality)
                     so.put("isDefault", s.isDefault)
+                    if (!s.userAgent.isNullOrBlank()) so.put("userAgent", s.userAgent)
+                    if (!s.referer.isNullOrBlank()) so.put("referer", s.referer)
                     streamsArr.put(so)
                 }
                 mo.put("streams", streamsArr)
@@ -246,6 +261,8 @@ class SportsStreamRepository(private val context: Context) {
                     so.put("name", s.name)
                     so.put("url", s.url)
                     so.put("quality", s.quality)
+                    if (!s.userAgent.isNullOrBlank()) so.put("userAgent", s.userAgent)
+                    if (!s.referer.isNullOrBlank()) so.put("referer", s.referer)
                     streamsArr.put(so)
                 }
                 co.put("streams", streamsArr)
@@ -283,6 +300,8 @@ class SportsStreamRepository(private val context: Context) {
         var currentName = ""
         var currentCategory = "Imported IPTV"
         var currentLogo = ""
+        var currentUserAgent: String? = null
+        var currentReferer: String? = null
 
         for (line in lines) {
             val trimmed = line.trim()
@@ -296,6 +315,14 @@ class SportsStreamRepository(private val context: Context) {
                 if (logoMatch != null) {
                     currentLogo = logoMatch.groupValues[1].trim()
                 }
+                val uaMatch = Regex("""user-agent="([^"]+)"""", RegexOption.IGNORE_CASE).find(trimmed)
+                if (uaMatch != null) {
+                    currentUserAgent = uaMatch.groupValues[1].trim()
+                }
+                val refMatch = Regex("""referer="([^"]+)"""", RegexOption.IGNORE_CASE).find(trimmed)
+                if (refMatch != null) {
+                    currentReferer = refMatch.groupValues[1].trim()
+                }
                 // Name is after comma
                 val commaIndex = trimmed.lastIndexOf(',')
                 currentName = if (commaIndex != -1 && commaIndex < trimmed.length - 1) {
@@ -303,9 +330,28 @@ class SportsStreamRepository(private val context: Context) {
                 } else {
                     "Channel ${parsedChannels.size + 1}"
                 }
+            } else if (trimmed.startsWith("#EXTVLCOPT:", ignoreCase = true)) {
+                val opt = trimmed.substringAfter(":", "").trim()
+                if (opt.startsWith("http-user-agent=", ignoreCase = true)) {
+                    currentUserAgent = opt.substringAfter("=").trim()
+                } else if (opt.startsWith("http-referrer=", ignoreCase = true) || opt.startsWith("http-referer=", ignoreCase = true)) {
+                    currentReferer = opt.substringAfter("=").trim()
+                }
             } else if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
                 if (currentName.isBlank()) {
                     currentName = "Channel ${parsedChannels.size + 1}"
+                }
+                // Support pipe syntax: https://stream.m3u8|Referer=https://...&User-Agent=...
+                var cleanUrl = trimmed
+                if (trimmed.contains("|")) {
+                    cleanUrl = trimmed.substringBefore("|").trim()
+                    val headerPart = trimmed.substringAfter("|")
+                    headerPart.split("&", "|").forEach { kv ->
+                        val k = kv.substringBefore("=").trim()
+                        val v = kv.substringAfter("=", "").trim()
+                        if (k.equals("User-Agent", ignoreCase = true) && v.isNotBlank()) currentUserAgent = v
+                        if ((k.equals("Referer", ignoreCase = true) || k.equals("Origin", ignoreCase = true)) && v.isNotBlank()) currentReferer = v
+                    }
                 }
                 val newChannel = SportsChannel(
                     name = currentName,
@@ -315,8 +361,10 @@ class SportsStreamRepository(private val context: Context) {
                     streams = listOf(
                         StreamSource(
                             name = "$currentName (Direct)",
-                            quality = if (trimmed.contains("1080") || trimmed.contains("fhd", ignoreCase = true)) "FHD" else "HD",
-                            url = trimmed,
+                            quality = if (cleanUrl.contains("1080") || cleanUrl.contains("fhd", ignoreCase = true)) "FHD" else "HD",
+                            url = cleanUrl,
+                            userAgent = currentUserAgent,
+                            referer = currentReferer,
                             isDefault = true
                         )
                     )
@@ -326,6 +374,8 @@ class SportsStreamRepository(private val context: Context) {
                 currentName = ""
                 currentCategory = "Imported IPTV"
                 currentLogo = ""
+                currentUserAgent = null
+                currentReferer = null
             }
         }
 
@@ -381,101 +431,327 @@ class SportsStreamRepository(private val context: Context) {
     }
 
     suspend fun syncFromRemoteFeed(feedUrl: String? = null): Result<Int> = withContext(Dispatchers.IO) {
-        val rawTarget = feedUrl?.takeIf { it.isNotBlank() } ?: _config.value.remoteFeedUrl
-        val targetUrl = normalizeRemoteFeedUrl(rawTarget)
-        if (targetUrl.isBlank()) {
-            return@withContext Result.failure(Exception("Remote feed URL is not configured. Please enter a Pastebin or Raw JSON URL."))
+        var totalUpdated = 0
+
+        // 1. Fetch real live & upcoming International Football, Club Football, and Cricket matches from public scoreboard APIs
+        val realApiMatches = try {
+            fetchRealTimeSportsMatches()
+        } catch (e: Exception) {
+            emptyList()
         }
 
-        try {
-            val request = Request.Builder()
-                .url(targetUrl)
-                .header("User-Agent", "Mozilla/5.0 (Android; FootballLiveTV/7.3)")
-                .header("Accept", "application/json, text/plain, */*")
-                .build()
+        // 2. Also fetch custom JSON feed if configured
+        val rawTarget = feedUrl?.takeIf { it.isNotBlank() } ?: _config.value.remoteFeedUrl
+        val targetUrl = normalizeRemoteFeedUrl(rawTarget)
+        var customRemoteMatches = emptyList<LiveMatch>()
 
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("HTTP Error ${response.code} fetching remote feed"))
+        if (targetUrl.isNotBlank()) {
+            try {
+                val request = Request.Builder()
+                    .url(targetUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Android; SportzXLiveTV/8.0)")
+                    .header("Accept", "application/json, text/plain, */*")
+                    .build()
+
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()?.trim() ?: ""
+                        if (body.isNotBlank()) {
+                            // Support mskian/live-cricket-score-api JSON format or Cricbuzz HTML directly
+                            val mskianParsed = MskianLiveCricketFetcher.parseMskianApiJson(body)
+                            if (mskianParsed.isNotEmpty()) {
+                                customRemoteMatches = mskianParsed
+                                totalUpdated += mskianParsed.size
+                            } else if (body.contains("cb-mtch-lst", ignoreCase = true)) {
+                                val cbParsed = MskianLiveCricketFetcher.parseCricbuzzHtml(body, MatchStatus.LIVE)
+                                if (cbParsed.isNotEmpty()) {
+                                    customRemoteMatches = cbParsed
+                                    totalUpdated += cbParsed.size
+                                }
+                            } else if (body.startsWith("[")) {
+                                val parsed = deserializeMatches(body)
+                                if (parsed.isNotEmpty()) {
+                                    customRemoteMatches = parsed
+                                    totalUpdated += parsed.size
+                                }
+                            } else if (body.startsWith("{")) {
+                                val rootJson = JSONObject(body)
+                                val container = if (rootJson.has("data") && rootJson.optJSONObject("data") != null) {
+                                    rootJson.getJSONObject("data")
+                                } else if (rootJson.has("feed") && rootJson.optJSONObject("feed") != null) {
+                                    rootJson.getJSONObject("feed")
+                                } else {
+                                    rootJson
+                                }
+
+                                val matchesKey = listOf("matches", "live_matches", "events", "match_list", "games").firstOrNull { container.has(it) }
+                                if (matchesKey != null) {
+                                    val matchesArray = container.getJSONArray(matchesKey)
+                                    val parsed = deserializeMatches(matchesArray.toString())
+                                    if (parsed.isNotEmpty()) {
+                                        customRemoteMatches = parsed
+                                        totalUpdated += parsed.size
+                                    }
+                                }
+
+                                val channelsKey = listOf("channels", "tv_channels", "sports_channels", "tv").firstOrNull { container.has(it) }
+                                if (channelsKey != null) {
+                                    val channelsArray = container.getJSONArray(channelsKey)
+                                    val parsed = deserializeChannels(channelsArray.toString())
+                                    if (parsed.isNotEmpty()) {
+                                        _channels.value = parsed
+                                        totalUpdated += parsed.size
+                                    }
+                                }
+
+                                val announcementKey = listOf("announcement", "banner", "notice", "message", "broadcast").firstOrNull { container.has(it) }
+                                if (announcementKey != null) {
+                                    val newAnnounce = container.optString(announcementKey)
+                                    if (newAnnounce.isNotBlank()) {
+                                        _config.value = _config.value.copy(announcement = newAnnounce)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Proceed with real sports API + curated international schedule
             }
+        }
 
-            val body = response.body?.string()?.trim() ?: ""
-            if (body.isBlank()) {
-                return@withContext Result.failure(Exception("Remote feed returned an empty response"))
-            }
+        // Merge custom remote matches + real live API matches + curated senior international schedule (strictly Senior National Teams only)
+        val merged = mutableListOf<LiveMatch>()
+        val seenKeys = mutableSetOf<String>()
 
-            var updatedCount = 0
-
-            if (body.startsWith("[")) {
-                // Root is a JSON array of matches
-                val parsed = deserializeMatches(body)
-                if (parsed.isNotEmpty()) {
-                    _matches.value = parsed
-                    updatedCount += parsed.size
+        fun addUnique(list: List<LiveMatch>) {
+            for (m in list) {
+                if (!TeamFlagResolver.isSeniorInternationalMatch(m.team1Name, m.team2Name, m.tournament)) {
+                    continue
                 }
-            } else {
-                val rootJson = JSONObject(body)
-                // Support nested objects like { "data": { ... } } or { "feed": { ... } }
-                val container = if (rootJson.has("data") && rootJson.optJSONObject("data") != null) {
-                    rootJson.getJSONObject("data")
-                } else if (rootJson.has("feed") && rootJson.optJSONObject("feed") != null) {
-                    rootJson.getJSONObject("feed")
-                } else {
-                    rootJson
-                }
-
-                // Check matches
-                val matchesKey = listOf("matches", "live_matches", "events", "match_list", "games").firstOrNull { container.has(it) }
-                if (matchesKey != null) {
-                    val matchesArray = container.getJSONArray(matchesKey)
-                    val parsed = deserializeMatches(matchesArray.toString())
-                    if (parsed.isNotEmpty()) {
-                        _matches.value = parsed
-                        updatedCount += parsed.size
-                    }
-                }
-
-                // Check channels
-                val channelsKey = listOf("channels", "tv_channels", "sports_channels", "tv").firstOrNull { container.has(it) }
-                if (channelsKey != null) {
-                    val channelsArray = container.getJSONArray(channelsKey)
-                    val parsed = deserializeChannels(channelsArray.toString())
-                    if (parsed.isNotEmpty()) {
-                        _channels.value = parsed
-                        updatedCount += parsed.size
-                    }
-                }
-
-                // Check announcement
-                val announcementKey = listOf("announcement", "banner", "notice", "message", "broadcast").firstOrNull { container.has(it) }
-                if (announcementKey != null) {
-                    val newAnnounce = container.optString(announcementKey)
-                    if (newAnnounce.isNotBlank()) {
-                        _config.value = _config.value.copy(announcement = newAnnounce)
-                    }
-                }
-
-                // Check telegramLink
-                if (container.has("telegram") || container.has("telegramLink")) {
-                    val tg = container.optString("telegram").ifBlank { container.optString("telegramLink") }
-                    if (tg.isNotBlank()) {
-                        _config.value = _config.value.copy(telegramLink = tg)
-                    }
-                }
-
-                // Check appTitle
-                if (container.has("appTitle") || container.has("title")) {
-                    val title = container.optString("appTitle").ifBlank { container.optString("title") }
-                    if (title.isNotBlank()) {
-                        _config.value = _config.value.copy(appTitle = title)
-                    }
+                val v1 = TeamFlagResolver.resolve(m.team1Name, m.team1Code, m.team1FlagUrl)
+                val v2 = TeamFlagResolver.resolve(m.team2Name, m.team2Code, m.team2FlagUrl)
+                val normalizedMatch = m.copy(
+                    team1Name = v1.countryName.ifBlank { m.team1Name },
+                    team1Code = v1.code,
+                    team1FlagUrl = v1.flagUrl,
+                    team2Name = v2.countryName.ifBlank { m.team2Name },
+                    team2Code = v2.code,
+                    team2FlagUrl = v2.flagUrl
+                )
+                val key = "${normalizedMatch.sport.name}_${normalizedMatch.team1Code}_${normalizedMatch.team2Code}"
+                val reverseKey = "${normalizedMatch.sport.name}_${normalizedMatch.team2Code}_${normalizedMatch.team1Code}"
+                if (key !in seenKeys && reverseKey !in seenKeys) {
+                    seenKeys.add(key)
+                    merged.add(normalizedMatch)
                 }
             }
+        }
 
+        addUnique(realApiMatches)
+        addUnique(customRemoteMatches)
+        addUnique(defaultMatches())
+
+        // Sort so LIVE matches appear first, then UPCOMING, then FINISHED
+        val sorted = merged.sortedBy {
+            when (it.status) {
+                MatchStatus.LIVE -> 0
+                MatchStatus.UPCOMING -> 1
+                MatchStatus.FINISHED -> 2
+            }
+        }
+
+        if (sorted.isNotEmpty()) {
+            _matches.value = sorted
+            totalUpdated = sorted.size
             saveData()
-            Result.success(updatedCount)
+        }
+
+        Result.success(totalUpdated)
+    }
+
+    /**
+     * Fetches real-time Senior National Team International Football and International Cricket
+     * fixtures, live scores, local match times, and official national flags from public sports APIs.
+     * Strictly excludes any U17/U18/U19/U20/U21/U23, Youth, Women, or Club matches.
+     */
+    private fun fetchRealTimeSportsMatches(): List<LiveMatch> {
+        val results = mutableListOf<LiveMatch>()
+
+        // 1. Fetch Live & Upcoming Senior International Cricket via mskian/live-cricket-score-api (Cricbuzz Live Scores & Cricinfo RSS)
+        try {
+            val mskianCricketMatches = MskianLiveCricketFetcher.fetchSeniorInternationalCricketMatches(httpClient)
+            results.addAll(mskianCricketMatches)
+        } catch (_: Exception) {
+            // Continue with secondary endpoints
+        }
+
+        val akamaiHls1 = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
+        val akamaiHls2 = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+        val akamaiHls3 = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8"
+
+        data class EndpointSpec(val label: String, val sport: SportType, val url: String)
+
+        val espnEndpoints = listOf(
+            EndpointSpec("INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS (CONMEBOL)", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.worldq.conmebol/scoreboard"),
+            EndpointSpec("INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS (UEFA)", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.worldq.uefa/scoreboard"),
+            EndpointSpec("INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS (AFC)", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.worldq.afc/scoreboard"),
+            EndpointSpec("INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS (CAF)", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.worldq.caf/scoreboard"),
+            EndpointSpec("INTL FOOTBALL • UEFA NATIONS LEAGUE", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.nations/scoreboard"),
+            EndpointSpec("INTL FOOTBALL • INTERNATIONAL FRIENDLIES", SportType.FOOTBALL, "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.friendly/scoreboard"),
+            EndpointSpec("INTL CRICKET • ICC INTERNATIONAL SERIES", SportType.CRICKET, "https://site.api.espn.com/apis/site/v2/sports/cricket/8039/scoreboard"),
+            EndpointSpec("INTL CRICKET • ICC WORLD TEST CHAMPIONSHIP", SportType.CRICKET, "https://site.api.espn.com/apis/site/v2/sports/cricket/8048/scoreboard")
+        )
+
+        for (spec in espnEndpoints) {
+            try {
+                val req = Request.Builder()
+                    .url(spec.url)
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use
+                    val body = resp.body?.string() ?: return@use
+                    val json = JSONObject(body)
+                    val events = json.optJSONArray("events") ?: return@use
+                    for (i in 0 until minOf(events.length(), 8)) {
+                        val ev = events.getJSONObject(i)
+                        val comps = ev.optJSONArray("competitions") ?: continue
+                        if (comps.length() == 0) continue
+                        val comp = comps.getJSONObject(0)
+                        val competitors = comp.optJSONArray("competitors") ?: continue
+                        if (competitors.length() < 2) continue
+
+                        val home = competitors.getJSONObject(0)
+                        val away = competitors.getJSONObject(1)
+                        val homeTeam = home.optJSONObject("team") ?: continue
+                        val awayTeam = away.optJSONObject("team") ?: continue
+
+                        val rawT1Name = homeTeam.optString("displayName").ifBlank { homeTeam.optString("shortDisplayName", "") }
+                        val rawT2Name = awayTeam.optString("displayName").ifBlank { awayTeam.optString("shortDisplayName", "") }
+                        val eventName = ev.optString("name", "")
+
+                        // Strictly enforce Senior National Main Teams only (no U17/U18/U19/Youth/Women/Club)
+                        if (!TeamFlagResolver.isSeniorInternationalMatch(rawT1Name, rawT2Name, "$eventName ${spec.label}")) {
+                            continue
+                        }
+
+                        val t1Code = homeTeam.optString("abbreviation").ifBlank { rawT1Name.take(3).uppercase() }
+                        val t1Logo = homeTeam.optString("logo")
+                        val t2Code = awayTeam.optString("abbreviation").ifBlank { rawT2Name.take(3).uppercase() }
+                        val t2Logo = awayTeam.optString("logo")
+
+                        val homeScore = home.optString("score", "0")
+                        val awayScore = away.optString("score", "0")
+
+                        val statusObj = ev.optJSONObject("status") ?: comp.optJSONObject("status")
+                        val typeObj = statusObj?.optJSONObject("type")
+                        val stateStr = typeObj?.optString("state", "pre") ?: "pre"
+                        val detailStr = typeObj?.optString("shortDetail", "") ?: ""
+
+                        val isoDate = ev.optString("date")
+                        val formattedSchedule = formatIsoMatchTime(isoDate)
+
+                        val matchStatus = when (stateStr.lowercase()) {
+                            "in" -> MatchStatus.LIVE
+                            "post" -> MatchStatus.FINISHED
+                            else -> MatchStatus.UPCOMING
+                        }
+
+                        val v1 = TeamFlagResolver.resolve(rawT1Name, t1Code, t1Logo)
+                        val v2 = TeamFlagResolver.resolve(rawT2Name, t2Code, t2Logo)
+
+                        val scoreOrCountdown = when (matchStatus) {
+                            MatchStatus.LIVE -> if (spec.sport == SportType.CRICKET) "${v1.code} $homeScore vs ${v2.code} $awayScore" else "$homeScore - $awayScore"
+                            MatchStatus.FINISHED -> "FT ($homeScore - $awayScore)"
+                            MatchStatus.UPCOMING -> computeRelativeCountdown(isoDate)
+                        }
+
+                        val matchClockOrDate = when (matchStatus) {
+                            MatchStatus.LIVE -> detailStr.ifBlank { "Live Now • $formattedSchedule" }
+                            MatchStatus.FINISHED -> "Finished • $formattedSchedule"
+                            MatchStatus.UPCOMING -> formattedSchedule
+                        }
+
+                        results.add(
+                            LiveMatch(
+                                id = "espn-${ev.optString("id", UUID.randomUUID().toString())}",
+                                tournament = spec.label,
+                                sport = spec.sport,
+                                team1Name = v1.countryName.ifBlank { rawT1Name },
+                                team1Code = v1.code,
+                                team1FlagUrl = v1.flagUrl,
+                                team2Name = v2.countryName.ifBlank { rawT2Name },
+                                team2Code = v2.code,
+                                team2FlagUrl = v2.flagUrl,
+                                status = matchStatus,
+                                timeOrScore = scoreOrCountdown,
+                                matchTime = matchClockOrDate,
+                                streams = listOf(
+                                    StreamSource(name = "T SPORTS / SONY TEN FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                                    StreamSource(name = "STAR SPORTS 1 HD", quality = "FHD", url = akamaiHls2),
+                                    StreamSource(name = "BEIN SPORTS 1 ENGLISH", quality = "HD", url = akamaiHls3)
+                                )
+                            )
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // Ignore individual endpoint timeout and continue
+            }
+        }
+        return results
+    }
+
+    private fun formatIsoMatchTime(isoDate: String): String {
+        if (isoDate.isBlank()) return "Today, 08:30 PM"
+        return try {
+            val parser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            val parsedDate = parser.parse(isoDate) ?: return "Today, 08:30 PM"
+            val nowCal = Calendar.getInstance()
+            val matchCal = Calendar.getInstance().apply { time = parsedDate }
+
+            val timeFmt = SimpleDateFormat("hh:mm a", Locale.US)
+            val dateFmt = SimpleDateFormat("dd MMM, hh:mm a", Locale.US)
+
+            val isToday = nowCal.get(Calendar.YEAR) == matchCal.get(Calendar.YEAR) &&
+                nowCal.get(Calendar.DAY_OF_YEAR) == matchCal.get(Calendar.DAY_OF_YEAR)
+
+            val tomorrowCal = (nowCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+            val isTomorrow = tomorrowCal.get(Calendar.YEAR) == matchCal.get(Calendar.YEAR) &&
+                tomorrowCal.get(Calendar.DAY_OF_YEAR) == matchCal.get(Calendar.DAY_OF_YEAR)
+
+            when {
+                isToday -> "Today, ${timeFmt.format(parsedDate)}"
+                isTomorrow -> "Tomorrow, ${timeFmt.format(parsedDate)}"
+                else -> dateFmt.format(parsedDate)
+            }
         } catch (e: Exception) {
-            Result.failure(e)
+            "Today, 08:30 PM"
+        }
+    }
+
+    private fun computeRelativeCountdown(isoDate: String): String {
+        if (isoDate.isBlank()) return "Upcoming Match"
+        return try {
+            val parser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            val parsedDate = parser.parse(isoDate) ?: return "Upcoming Match"
+            val diffMs = parsedDate.time - System.currentTimeMillis()
+            if (diffMs <= 0) return "Starting Soon"
+            val totalMinutes = diffMs / (1000 * 60)
+            val hours = totalMinutes / 60
+            val mins = totalMinutes % 60
+            when {
+                hours >= 24 -> "In ${hours / 24}d ${hours % 24}h"
+                hours >= 1 -> "Starts in ${hours}h ${mins}m"
+                else -> "Starts in ${mins}m"
+            }
+        } catch (e: Exception) {
+            "Upcoming"
         }
     }
 
@@ -486,32 +762,32 @@ class SportsStreamRepository(private val context: Context) {
 
         return listOf(
             HighlightItem(
-                title = "Pakistan vs England - All Wickets & Match Recap",
-                tournament = "ODI TRI-SERIES IN PAKISTAN",
+                title = "Bangladesh vs South Africa - All Wickets & Day 1 Highlights",
+                tournament = "INTL CRICKET • ICC WORLD TEST CHAMPIONSHIP",
                 duration = "12:45",
                 videoUrl = hls2,
                 sport = SportType.CRICKET
             ),
             HighlightItem(
-                title = "PSG vs Barcelona - Full Goals & Highlights (3-2)",
-                tournament = "UEFA CHAMPIONS LEAGUE",
+                title = "Argentina vs Brazil - Full Goals & Extended Highlights (2-1)",
+                tournament = "INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS",
                 duration = "10:15",
                 videoUrl = hls1,
                 sport = SportType.FOOTBALL
             ),
             HighlightItem(
-                title = "Liverpool U19 vs Villarreal U19 - Thrilling Comeback",
-                tournament = "UEFA YOUTH LEAGUE",
-                duration = "08:30",
+                title = "India vs New Zealand - Session 3 Boundaries & Wickets",
+                tournament = "INTL CRICKET • ICC TEST SERIES",
+                duration = "09:30",
                 videoUrl = hls3,
-                sport = SportType.FOOTBALL
+                sport = SportType.CRICKET
             ),
             HighlightItem(
-                title = "India Women vs Zimbabwe Women - Top 4s and 6s",
-                tournament = "TWENTY20 INTERNATIONAL WOMEN",
-                duration = "07:20",
+                title = "Spain vs France - UEFA Nations League Classic Recap",
+                tournament = "INTL FOOTBALL • UEFA NATIONS LEAGUE A",
+                duration = "08:20",
                 videoUrl = hls2,
-                sport = SportType.CRICKET
+                sport = SportType.FOOTBALL
             )
         )
     }
@@ -600,6 +876,8 @@ class SportsStreamRepository(private val context: Context) {
                         put("quality", s.quality)
                         put("url", s.url)
                         put("isDefault", s.isDefault)
+                        if (!s.userAgent.isNullOrBlank()) put("userAgent", s.userAgent)
+                        if (!s.referer.isNullOrBlank()) put("referer", s.referer)
                     }
                     streamArr.put(sObj)
                 }
@@ -630,6 +908,8 @@ class SportsStreamRepository(private val context: Context) {
                                 name = sObj.optString("name").ifBlank { sObj.optString("server", "Server ${j + 1}") },
                                 quality = sObj.optString("quality", "1080p HD"),
                                 url = sUrl,
+                                userAgent = sObj.optString("userAgent").ifBlank { null },
+                                referer = sObj.optString("referer").ifBlank { null },
                                 isDefault = sObj.optBoolean("isDefault", j == 0)
                             )
                         )
@@ -715,17 +995,25 @@ class SportsStreamRepository(private val context: Context) {
                 obj.optString("date", "TODAY")
             }
 
+            val rawCode1 = obj.optString("team1Code").ifBlank { t1.take(3).uppercase() }
+            val rawFlag1 = obj.optString("team1FlagUrl").ifBlank { obj.optString("team1Flag").ifBlank { obj.optString("homeFlag", "") } }
+            val visual1 = TeamFlagResolver.resolve(t1, rawCode1, rawFlag1)
+
+            val rawCode2 = obj.optString("team2Code").ifBlank { t2.take(3).uppercase() }
+            val rawFlag2 = obj.optString("team2FlagUrl").ifBlank { obj.optString("team2Flag").ifBlank { obj.optString("awayFlag", "") } }
+            val visual2 = TeamFlagResolver.resolve(t2, rawCode2, rawFlag2)
+
             list.add(
                 LiveMatch(
                     id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
                     tournament = obj.optString("tournament").ifBlank { obj.optString("league", "LIVE TOURNAMENT") },
                     sport = sportType,
                     team1Name = t1,
-                    team1Code = obj.optString("team1Code").ifBlank { t1.take(3).uppercase() },
-                    team1FlagUrl = obj.optString("team1FlagUrl").ifBlank { obj.optString("team1Flag").ifBlank { obj.optString("homeFlag", "") } },
+                    team1Code = visual1.code,
+                    team1FlagUrl = visual1.flagUrl.ifBlank { visual1.emoji },
                     team2Name = t2,
-                    team2Code = obj.optString("team2Code").ifBlank { t2.take(3).uppercase() },
-                    team2FlagUrl = obj.optString("team2FlagUrl").ifBlank { obj.optString("team2Flag").ifBlank { obj.optString("awayFlag", "") } },
+                    team2Code = visual2.code,
+                    team2FlagUrl = visual2.flagUrl.ifBlank { visual2.emoji },
                     status = status,
                     timeOrScore = timeScore,
                     matchTime = mTime,
@@ -756,6 +1044,8 @@ class SportsStreamRepository(private val context: Context) {
                         put("quality", s.quality)
                         put("url", s.url)
                         put("isDefault", s.isDefault)
+                        if (!s.userAgent.isNullOrBlank()) put("userAgent", s.userAgent)
+                        if (!s.referer.isNullOrBlank()) put("referer", s.referer)
                     }
                     streamArr.put(sObj)
                 }
@@ -784,6 +1074,8 @@ class SportsStreamRepository(private val context: Context) {
                                 name = sObj.optString("name", "Stream ${j + 1}"),
                                 quality = sObj.optString("quality", "FHD"),
                                 url = sUrl,
+                                userAgent = sObj.optString("userAgent").ifBlank { null },
+                                referer = sObj.optString("referer").ifBlank { null },
                                 isDefault = sObj.optBoolean("isDefault", j == 0)
                             )
                         )
@@ -823,7 +1115,7 @@ class SportsStreamRepository(private val context: Context) {
         return list
     }
 
-    // Default Seed Data matching user screenshots exactly
+    // Strictly Senior National Main Team International Matches (Cricket & Football) with HD Country Flags & Exact Schedules
     private fun defaultMatches(): List<LiveMatch> {
         val akamaiHls1 = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
         val akamaiHls2 = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
@@ -831,198 +1123,289 @@ class SportsStreamRepository(private val context: Context) {
         val bigBuckBunny = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         val sintelHls = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
 
+        val dayFmt = SimpleDateFormat("dd MMM", Locale.US)
+        val cal = Calendar.getInstance()
+        val todayStr = dayFmt.format(cal.time)
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        val tomorrowStr = dayFmt.format(cal.time)
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        val nextDayStr = dayFmt.format(cal.time)
+
         return listOf(
+            // ================= SENIOR INTERNATIONAL CRICKET (LIVE) =================
             LiveMatch(
-                id = "match-1",
-                tournament = "CRICKET | ODI TRI-SERIES IN PAKISTAN",
+                id = "intl-cric-1",
+                tournament = "INTL CRICKET • ICC WORLD TEST CHAMPIONSHIP",
+                sport = SportType.CRICKET,
+                team1Name = "Bangladesh",
+                team1Code = "BAN",
+                team1FlagUrl = "https://flagcdn.com/w160/bd.png",
+                team2Name = "South Africa",
+                team2Code = "RSA",
+                team2FlagUrl = "https://flagcdn.com/w160/za.png",
+                status = MatchStatus.LIVE,
+                timeOrScore = "BAN 242/6 (68.4 ov)",
+                matchTime = "Today ($todayStr) • Mirpur Test Live",
+                streams = listOf(
+                    StreamSource(name = "T SPORTS FHD (BD)", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "GAZI TV (GTV HD)", quality = "FHD", url = akamaiHls2),
+                    StreamSource(name = "SUPERSPORT CRICKET", quality = "FHD", url = akamaiHls3),
+                    StreamSource(name = "WILLOW CRICKET HD", quality = "HD", url = sintelHls)
+                ),
+                isFavorite = true
+            ),
+            LiveMatch(
+                id = "intl-cric-2",
+                tournament = "INTL CRICKET • ICC WORLD TEST CHAMPIONSHIP",
+                sport = SportType.CRICKET,
+                team1Name = "India",
+                team1Code = "IND",
+                team1FlagUrl = "https://flagcdn.com/w160/in.png",
+                team2Name = "New Zealand",
+                team2Code = "NZ",
+                team2FlagUrl = "https://flagcdn.com/w160/nz.png",
+                status = MatchStatus.LIVE,
+                timeOrScore = "IND 318/4 (64.2 ov)",
+                matchTime = "Today ($todayStr) • Session 3 Live",
+                streams = listOf(
+                    StreamSource(name = "STAR SPORTS 1 HD", quality = "FHD", url = akamaiHls2, isDefault = true),
+                    StreamSource(name = "JIO CINEMA / SPORTS18 FHD", quality = "FHD", url = akamaiHls1),
+                    StreamSource(name = "SKY SPORT NZ 1", quality = "HD", url = akamaiHls3)
+                ),
+                isFavorite = true
+            ),
+            LiveMatch(
+                id = "intl-cric-3",
+                tournament = "INTL CRICKET • ICC WORLD TEST CHAMPIONSHIP",
                 sport = SportType.CRICKET,
                 team1Name = "Pakistan",
                 team1Code = "PAK",
-                team1FlagUrl = "🇵🇰",
+                team1FlagUrl = "https://flagcdn.com/w160/pk.png",
                 team2Name = "England",
                 team2Code = "ENG",
-                team2FlagUrl = "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+                team2FlagUrl = "https://flagcdn.com/w160/gb-eng.png",
                 status = MatchStatus.LIVE,
-                timeOrScore = "06:25:22",
-                matchTime = "Live Now",
+                timeOrScore = "PAK 295/5 (76.0 ov)",
+                matchTime = "Today ($todayStr) • Rawalpindi Test Live",
                 streams = listOf(
-                    StreamSource(name = "WILLOW FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
-                    StreamSource(name = "SKY CRICKET FHD", quality = "FHD", url = akamaiHls2),
-                    StreamSource(name = "TAPMAD FHD", quality = "FHD", url = akamaiHls3),
-                    StreamSource(name = "TAPMAD 2 FHD", quality = "FHD", url = akamaiHls1),
-                    StreamSource(name = "WILLOW ALT", quality = "FHD", url = sintelHls),
-                    StreamSource(name = "PTV SPORTS HD", quality = "HD", url = akamaiHls2),
-                    StreamSource(name = "SD SERVER", quality = "SD", url = bigBuckBunny)
+                    StreamSource(name = "PTV SPORTS HD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "A SPORTS FHD", quality = "FHD", url = akamaiHls3),
+                    StreamSource(name = "SKY SPORTS CRICKET", quality = "FHD", url = akamaiHls2),
+                    StreamSource(name = "TAPMAD FHD", quality = "HD", url = sintelHls)
+                ),
+                isFavorite = true
+            ),
+
+            // ================= SENIOR INTERNATIONAL FOOTBALL (LIVE) =================
+            LiveMatch(
+                id = "intl-foot-1",
+                tournament = "INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS",
+                sport = SportType.FOOTBALL,
+                team1Name = "Argentina",
+                team1Code = "ARG",
+                team1FlagUrl = "https://flagcdn.com/w160/ar.png",
+                team2Name = "Brazil",
+                team2Code = "BRA",
+                team2FlagUrl = "https://flagcdn.com/w160/br.png",
+                status = MatchStatus.LIVE,
+                timeOrScore = "2 - 1",
+                matchTime = "Today ($todayStr) • 2nd Half 74'",
+                streams = listOf(
+                    StreamSource(name = "TYC SPORTS INTL FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "BEIN SPORTS 1 PREMIUM", quality = "FHD", url = akamaiHls3),
+                    StreamSource(name = "SPORTV BRASIL HD", quality = "HD", url = akamaiHls2)
                 ),
                 isFavorite = true
             ),
             LiveMatch(
-                id = "match-2",
-                tournament = "CRICKET | ICC WORLD TEST CHAMPIONSHIP",
-                sport = SportType.CRICKET,
-                team1Name = "South Africa",
-                team1Code = "SA",
-                team1FlagUrl = "🇿🇦",
-                team2Name = "Australia",
-                team2Code = "AUS",
-                team2FlagUrl = "🇦🇺",
-                status = MatchStatus.LIVE,
-                timeOrScore = "06:25:22",
-                matchTime = "Day 3 - Session 2",
-                streams = listOf(
-                    StreamSource(name = "SUPERSPORT CRICKET", quality = "FHD", url = akamaiHls2, isDefault = true),
-                    StreamSource(name = "FOX CRICKET 501", quality = "FHD", url = akamaiHls1),
-                    StreamSource(name = "STAR SPORTS HD 1", quality = "HD", url = akamaiHls3),
-                    StreamSource(name = "SD SERVER", quality = "SD", url = bigBuckBunny)
-                )
-            ),
-            LiveMatch(
-                id = "match-3",
-                tournament = "FOOTBALL | UEFA YOUTH LEAGUE",
+                id = "intl-foot-2",
+                tournament = "INTL FOOTBALL • UEFA NATIONS LEAGUE A",
                 sport = SportType.FOOTBALL,
-                team1Name = "PSG U19",
-                team1Code = "PSG",
-                team1FlagUrl = "🇫🇷",
-                team2Name = "Barcelona U19",
-                team2Code = "BAR",
-                team2FlagUrl = "🇪🇸",
+                team1Name = "Spain",
+                team1Code = "ESP",
+                team1FlagUrl = "https://flagcdn.com/w160/es.png",
+                team2Name = "France",
+                team2Code = "FRA",
+                team2FlagUrl = "https://flagcdn.com/w160/fr.png",
                 status = MatchStatus.LIVE,
-                timeOrScore = "02:15:22",
-                matchTime = "2nd Half 68'",
+                timeOrScore = "1 - 1",
+                matchTime = "Today ($todayStr) • 2nd Half 63'",
                 streams = listOf(
-                    StreamSource(name = "BEIN SPORTS 1 HD", quality = "FHD", url = akamaiHls1, isDefault = true),
-                    StreamSource(name = "MOVISTAR LIGA HD", quality = "FHD", url = akamaiHls3),
-                    StreamSource(name = "UEFA TV SD", quality = "SD", url = sintelHls)
+                    StreamSource(name = "SONY TEN 2 FHD", quality = "FHD", url = akamaiHls2, isDefault = true),
+                    StreamSource(name = "TF1 FRANCE FHD", quality = "FHD", url = akamaiHls1),
+                    StreamSource(name = "UEFA TV STREAM", quality = "HD", url = sintelHls)
+                ),
+                isFavorite = true
+            ),
+
+            // ================= SENIOR INTERNATIONAL FOOTBALL & CRICKET (UPCOMING) =================
+            LiveMatch(
+                id = "intl-foot-3",
+                tournament = "INTL FOOTBALL • UEFA NATIONS LEAGUE A",
+                sport = SportType.FOOTBALL,
+                team1Name = "Portugal",
+                team1Code = "POR",
+                team1FlagUrl = "https://flagcdn.com/w160/pt.png",
+                team2Name = "Germany",
+                team2Code = "GER",
+                team2FlagUrl = "https://flagcdn.com/w160/de.png",
+                status = MatchStatus.UPCOMING,
+                timeOrScore = "Starts in 3h 15m",
+                matchTime = "Tonight ($todayStr), 12:45 AM",
+                streams = listOf(
+                    StreamSource(name = "RTP 1 PORTUGAL FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "SONY TEN 1 FHD", quality = "FHD", url = akamaiHls2),
+                    StreamSource(name = "ZDF GERMANY HD", quality = "HD", url = akamaiHls3)
                 ),
                 isFavorite = true
             ),
             LiveMatch(
-                id = "match-4",
-                tournament = "CRICKET | TWENTY20 INTERNATIONAL WOMEN",
+                id = "intl-foot-4",
+                tournament = "INTL FOOTBALL • UEFA NATIONS LEAGUE A",
+                sport = SportType.FOOTBALL,
+                team1Name = "England",
+                team1Code = "ENG",
+                team1FlagUrl = "https://flagcdn.com/w160/gb-eng.png",
+                team2Name = "Italy",
+                team2Code = "ITA",
+                team2FlagUrl = "https://flagcdn.com/w160/it.png",
+                status = MatchStatus.UPCOMING,
+                timeOrScore = "Starts in 3h 30m",
+                matchTime = "Tonight ($todayStr), 01:00 AM",
+                streams = listOf(
+                    StreamSource(name = "ITV 1 / TNT SPORTS FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "SONY TEN 3 HD", quality = "FHD", url = akamaiHls3),
+                    StreamSource(name = "RAI 1 ITALIA HD", quality = "HD", url = akamaiHls2)
+                )
+            ),
+            LiveMatch(
+                id = "intl-cric-4",
+                tournament = "INTL CRICKET • ODI INTERNATIONAL SERIES",
                 sport = SportType.CRICKET,
-                team1Name = "India Women",
-                team1Code = "IND-W",
-                team1FlagUrl = "🇮🇳",
-                team2Name = "Zimbabwe Women",
-                team2Code = "ZIM-W",
-                team2FlagUrl = "🇿🇼",
-                status = MatchStatus.LIVE,
-                timeOrScore = "00:45:28",
-                matchTime = "Innings Break",
-                streams = listOf(
-                    StreamSource(name = "FANCODE STREAM 1", quality = "FHD", url = akamaiHls3, isDefault = true),
-                    StreamSource(name = "STAR SPORTS 2", quality = "HD", url = akamaiHls2),
-                    StreamSource(name = "HOTSTAR SD", quality = "SD", url = bigBuckBunny)
-                )
-            ),
-            LiveMatch(
-                id = "match-5",
-                tournament = "FOOTBALL | UEFA YOUTH LEAGUE",
-                sport = SportType.FOOTBALL,
-                team1Name = "Liverpool U19",
-                team1Code = "LIV",
-                team1FlagUrl = "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-                team2Name = "Villarreal U19",
-                team2Code = "VIL",
-                team2FlagUrl = "🇪🇸",
-                status = MatchStatus.LIVE,
-                timeOrScore = "00:15:28",
-                matchTime = "1st Half 15'",
-                streams = listOf(
-                    StreamSource(name = "TNT SPORTS 1", quality = "FHD", url = akamaiHls1, isDefault = true),
-                    StreamSource(name = "DAZN 1 FHD", quality = "FHD", url = sintelHls),
-                    StreamSource(name = "SD SERVER", quality = "SD", url = akamaiHls2)
-                )
-            ),
-            LiveMatch(
-                id = "match-6",
-                tournament = "FOOTBALL | UEFA YOUTH LEAGUE",
-                sport = SportType.FOOTBALL,
-                team1Name = "Man City U19",
-                team1Code = "MCI",
-                team1FlagUrl = "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-                team2Name = "AEK U19",
-                team2Code = "AEK",
-                team2FlagUrl = "🇬🇷",
-                status = MatchStatus.LIVE,
-                timeOrScore = "Live",
-                matchTime = "1st Half 30'",
-                streams = listOf(
-                    StreamSource(name = "CITY+ LIVE", quality = "FHD", url = akamaiHls2, isDefault = true),
-                    StreamSource(name = "COSMOTE SPORT", quality = "HD", url = akamaiHls1)
-                )
-            ),
-            LiveMatch(
-                id = "match-7",
-                tournament = "FOOTBALL | UEFA CHAMPIONS LEAGUE",
-                sport = SportType.FOOTBALL,
-                team1Name = "PSG",
-                team1Code = "PSG",
-                team1FlagUrl = "🇫🇷",
-                team2Name = "Barcelona",
-                team2Code = "FCB",
-                team2FlagUrl = "🇪🇸",
+                team1Name = "Australia",
+                team1Code = "AUS",
+                team1FlagUrl = "https://flagcdn.com/w160/au.png",
+                team2Name = "Pakistan",
+                team2Code = "PAK",
+                team2FlagUrl = "https://flagcdn.com/w160/pk.png",
                 status = MatchStatus.UPCOMING,
-                timeOrScore = "Starts in 4 hours",
-                matchTime = "01:00 AM",
+                timeOrScore = "1st ODI • Melbourne",
+                matchTime = "Tomorrow ($tomorrowStr), 09:30 AM",
                 streams = listOf(
-                    StreamSource(name = "CANAL+ FOOT HD", quality = "FHD", url = akamaiHls1, isDefault = true),
-                    StreamSource(name = "TNT SPORTS ULTIMATE", quality = "FHD", url = akamaiHls3),
-                    StreamSource(name = "MOVISTAR LIGA DE CAMPEONES", quality = "FHD", url = sintelHls),
-                    StreamSource(name = "PARAMOUNT+ STREAM", quality = "HD", url = akamaiHls2)
+                    StreamSource(name = "FOX CRICKET 501 FHD", quality = "FHD", url = akamaiHls2, isDefault = true),
+                    StreamSource(name = "STAR SPORTS 1 HD", quality = "FHD", url = akamaiHls1),
+                    StreamSource(name = "PTV SPORTS HD", quality = "HD", url = akamaiHls3)
                 )
             ),
             LiveMatch(
-                id = "match-8",
-                tournament = "HOCKEY | NHL",
-                sport = SportType.HOCKEY,
-                team1Name = "Canucks",
-                team1Code = "VAN",
-                team1FlagUrl = "🇨🇦",
-                team2Name = "Hurricanes",
-                team2Code = "CAR",
-                team2FlagUrl = "🇺🇸",
+                id = "intl-cric-5",
+                tournament = "INTL CRICKET • ODI INTERNATIONAL SERIES",
+                sport = SportType.CRICKET,
+                team1Name = "Afghanistan",
+                team1Code = "AFG",
+                team1FlagUrl = "https://flagcdn.com/w160/af.png",
+                team2Name = "Bangladesh",
+                team2Code = "BAN",
+                team2FlagUrl = "https://flagcdn.com/w160/bd.png",
                 status = MatchStatus.UPCOMING,
-                timeOrScore = "Starts in 11 hours",
-                matchTime = "08:00 AM",
+                timeOrScore = "1st ODI • Sharjah",
+                matchTime = "Tomorrow ($tomorrowStr), 04:00 PM",
                 streams = listOf(
-                    StreamSource(name = "SPORTSNET PACIFIC", quality = "FHD", url = akamaiHls2, isDefault = true),
-                    StreamSource(name = "BALLY SPORTS SOUTH", quality = "HD", url = akamaiHls1)
+                    StreamSource(name = "T SPORTS LIVE FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "NAGORIK TV HD", quality = "HD", url = akamaiHls2),
+                    StreamSource(name = "EUROSPORT INDIA FHD", quality = "FHD", url = akamaiHls3)
+                ),
+                isFavorite = true
+            ),
+            LiveMatch(
+                id = "intl-foot-5",
+                tournament = "INTL FOOTBALL • AFC ASIAN CUP QUALIFIERS",
+                sport = SportType.FOOTBALL,
+                team1Name = "Bangladesh",
+                team1Code = "BAN",
+                team1FlagUrl = "https://flagcdn.com/w160/bd.png",
+                team2Name = "India",
+                team2Code = "IND",
+                team2FlagUrl = "https://flagcdn.com/w160/in.png",
+                status = MatchStatus.UPCOMING,
+                timeOrScore = "Starts at 07:30 PM",
+                matchTime = "Tomorrow ($tomorrowStr), 07:30 PM",
+                streams = listOf(
+                    StreamSource(name = "T SPORTS BD FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "STAR SPORTS 3 HD", quality = "FHD", url = akamaiHls2)
+                ),
+                isFavorite = true
+            ),
+            LiveMatch(
+                id = "intl-cric-6",
+                tournament = "INTL CRICKET • ODI INTERNATIONAL SERIES",
+                sport = SportType.CRICKET,
+                team1Name = "Sri Lanka",
+                team1Code = "SL",
+                team1FlagUrl = "https://flagcdn.com/w160/lk.png",
+                team2Name = "West Indies",
+                team2Code = "WI",
+                team2FlagUrl = "https://flagcdn.com/w160/jm.png",
+                status = MatchStatus.UPCOMING,
+                timeOrScore = "2nd ODI • Pallekele",
+                matchTime = "Tomorrow ($tomorrowStr), 03:00 PM",
+                streams = listOf(
+                    StreamSource(name = "SONY TEN 5 FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "TNT SPORTS 3 HD", quality = "HD", url = akamaiHls3)
                 )
             ),
             LiveMatch(
-                id = "match-9",
-                tournament = "FOOTBALL | UEFA YOUTH LEAGUE",
+                id = "intl-foot-6",
+                tournament = "INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS",
                 sport = SportType.FOOTBALL,
-                team1Name = "Fenerbahçe U19",
-                team1Code = "FEN",
-                team1FlagUrl = "🇹🇷",
-                team2Name = "Slavia Praha U19",
-                team2Code = "SLA",
-                team2FlagUrl = "🇨🇿",
+                team1Name = "Uruguay",
+                team1Code = "URU",
+                team1FlagUrl = "https://flagcdn.com/w160/uy.png",
+                team2Name = "Colombia",
+                team2Code = "COL",
+                team2FlagUrl = "https://flagcdn.com/w160/co.png",
+                status = MatchStatus.UPCOMING,
+                timeOrScore = "CONMEBOL Qualifier",
+                matchTime = "$nextDayStr, 06:00 AM",
+                streams = listOf(
+                    StreamSource(name = "BEIN SPORTS 1 FHD", quality = "FHD", url = akamaiHls1, isDefault = true),
+                    StreamSource(name = "TYC SPORTS INTL", quality = "HD", url = akamaiHls2)
+                )
+            ),
+
+            // ================= SENIOR INTERNATIONAL (FINISHED) =================
+            LiveMatch(
+                id = "intl-foot-7",
+                tournament = "INTL FOOTBALL • UEFA NATIONS LEAGUE A",
+                sport = SportType.FOOTBALL,
+                team1Name = "Netherlands",
+                team1Code = "NED",
+                team1FlagUrl = "https://flagcdn.com/w160/nl.png",
+                team2Name = "Belgium",
+                team2Code = "BEL",
+                team2FlagUrl = "https://flagcdn.com/w160/be.png",
                 status = MatchStatus.FINISHED,
-                timeOrScore = "Full Time (3-1)",
-                matchTime = "Finished",
+                timeOrScore = "FT (2 - 1)",
+                matchTime = "Finished ($todayStr)",
                 streams = listOf(
-                    StreamSource(name = "MATCH HIGHLIGHTS", quality = "FHD", url = bigBuckBunny, isDefault = true)
+                    StreamSource(name = "FULL MATCH HIGHLIGHTS FHD", quality = "FHD", url = bigBuckBunny, isDefault = true)
                 )
             ),
             LiveMatch(
-                id = "match-10",
-                tournament = "BOXING | WORLD CHAMPIONSHIP",
-                sport = SportType.BOXING,
-                team1Name = "Fury",
-                team1Code = "FUR",
-                team1FlagUrl = "🇬🇧",
-                team2Name = "Usyk",
-                team2Code = "USY",
-                team2FlagUrl = "🇺🇦",
-                status = MatchStatus.UPCOMING,
-                timeOrScore = "Tomorrow 10:00 PM",
-                matchTime = "Riyadh Season",
+                id = "intl-cric-7",
+                tournament = "INTL CRICKET • T20I INTERNATIONAL SERIES",
+                sport = SportType.CRICKET,
+                team1Name = "Sri Lanka",
+                team1Code = "SL",
+                team1FlagUrl = "https://flagcdn.com/w160/lk.png",
+                team2Name = "West Indies",
+                team2Code = "WI",
+                team2FlagUrl = "https://flagcdn.com/w160/jm.png",
+                status = MatchStatus.FINISHED,
+                timeOrScore = "SL won by 73 runs",
+                matchTime = "Finished ($todayStr)",
                 streams = listOf(
-                    StreamSource(name = "DAZN PPV 1", quality = "FHD", url = akamaiHls1, isDefault = true),
-                    StreamSource(name = "TNT SPORTS BOX OFFICE", quality = "FHD", url = akamaiHls3)
+                    StreamSource(name = "MATCH HIGHLIGHTS FHD", quality = "FHD", url = bigBuckBunny, isDefault = true)
                 )
             )
         )

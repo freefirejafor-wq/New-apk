@@ -135,6 +135,7 @@ fun FootballLiveTvApp(
     // Dialog states
     var showStreamPickerModal by remember { mutableStateOf(false) }
     var streamPickerMatch by remember { mutableStateOf<LiveMatch?>(null) }
+    var streamPickerChannel by remember { mutableStateOf<SportsChannel?>(null) }
     var showNetworkStreamDialog by remember { mutableStateOf(false) }
     var showM3UImportDialog by remember { mutableStateOf(false) }
     var showHighlightsDialog by remember { mutableStateOf(false) }
@@ -143,6 +144,9 @@ fun FootballLiveTvApp(
     var scoresSportTitle by remember { mutableStateOf("Football") }
     var showAnnouncementBanner by remember { mutableStateOf(true) }
     var showTelegramDialog by remember { mutableStateOf(false) }
+
+    val isPlayerPlaying by playerManager.isPlaying.collectAsState()
+    val currentStream by playerManager.currentStream.collectAsState()
 
     fun startPlaying(match: LiveMatch?, title: String?, streams: List<StreamSource>) {
         activeMatch = match
@@ -186,6 +190,7 @@ fun FootballLiveTvApp(
                 onSwitchMatch = { newMatch ->
                     startPlaying(newMatch, null, newMatch.streams)
                 },
+                onFavoriteToggle = { repository.toggleMatchFavorite(it) },
                 onEnterPiP = onEnterPiP
             )
         }
@@ -273,11 +278,99 @@ fun FootballLiveTvApp(
                         }
                     }
                 },
+                snackbarHost = {
+                    SnackbarHost(hostState = snackbarHostState)
+                },
                 bottomBar = {
-                    BottomSportsNavBar(
-                        selectedTab = selectedTab,
-                        onTabSelected = { selectedTab = it }
-                    )
+                    Column {
+                        // Mini Now-Playing Bar when a stream was opened
+                        if (currentStream != null && activeStreams.isNotEmpty()) {
+                            val nowPlayingTitle = activeMatch?.let { "${it.team1Code} vs ${it.team2Code}" }
+                                ?: activeChannelTitle
+                                ?: currentStream?.name
+                                ?: "Live Stream"
+                            Surface(
+                                color = NavySurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(0.5.dp, CyanAccent.copy(alpha = 0.4f))
+                                    .clickable { currentScreen = AppScreen.PLAYER }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.LiveTv,
+                                            contentDescription = null,
+                                            tint = CyanAccent,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = nowPlayingTitle,
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary,
+                                                    fontSize = 12.sp
+                                                ),
+                                                maxLines = 1
+                                            )
+                                            Text(
+                                                text = currentStream?.name ?: "Tap to return to player",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    color = CyanAccent,
+                                                    fontSize = 10.sp
+                                                ),
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = {
+                                                if (isPlayerPlaying) playerManager.pause() else playerManager.resume()
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                if (isPlayerPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = "Play/Pause",
+                                                tint = CyanAccent
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                playerManager.pause()
+                                                activeStreams = emptyList()
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Close mini player",
+                                                tint = TextSecondary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        BottomSportsNavBar(
+                            selectedTab = selectedTab,
+                            onTabSelected = { selectedTab = it }
+                        )
+                    }
                 },
                 containerColor = NavyDark
             ) { padding ->
@@ -311,7 +404,13 @@ fun FootballLiveTvApp(
                             SportsChannelsScreen(
                                 channels = channels,
                                 onChannelClick = { channel ->
-                                    startPlaying(null, channel.name, channel.streams)
+                                    if (channel.streams.size > 1) {
+                                        streamPickerChannel = channel
+                                        streamPickerMatch = null
+                                        showStreamPickerModal = true
+                                    } else {
+                                        startPlaying(null, channel.name, channel.streams)
+                                    }
                                 },
                                 onFavoriteToggle = { repository.toggleChannelFavorite(it) },
                                 searchQuery = searchQuery
@@ -334,10 +433,17 @@ fun FootballLiveTvApp(
                                 favoriteChannels = channels.filter { it.isFavorite },
                                 onMatchClick = { match ->
                                     streamPickerMatch = match
+                                    streamPickerChannel = null
                                     showStreamPickerModal = true
                                 },
                                 onChannelClick = { channel ->
-                                    startPlaying(null, channel.name, channel.streams)
+                                    if (channel.streams.size > 1) {
+                                        streamPickerChannel = channel
+                                        streamPickerMatch = null
+                                        showStreamPickerModal = true
+                                    } else {
+                                        startPlaying(null, channel.name, channel.streams)
+                                    }
                                 },
                                 onMatchFavoriteToggle = { repository.toggleMatchFavorite(it) },
                                 onChannelFavoriteToggle = { repository.toggleChannelFavorite(it) },
@@ -377,23 +483,41 @@ fun FootballLiveTvApp(
         }
     }
 
-    // Modal: Stream selection from list
-    if (showStreamPickerModal && streamPickerMatch != null) {
-        val currentMatch = streamPickerMatch!!
-        MultipleStreamsModalDialog(
-            streams = currentMatch.streams,
-            currentSelectedStream = currentMatch.streams.firstOrNull(),
-            matchTitle = "${currentMatch.team1Name} vs ${currentMatch.team2Name}",
-            matchTournament = currentMatch.tournament,
-            matchStatus = currentMatch.status.name,
-            onStreamSelected = { selected ->
-                startPlaying(currentMatch, null, listOf(selected) + currentMatch.streams.filter { it.id != selected.id })
-            },
-            onDismiss = {
-                showStreamPickerModal = false
-                streamPickerMatch = null
-            }
-        )
+    // Modal: Stream selection from list (Match or Multi-Server Channel)
+    if (showStreamPickerModal && (streamPickerMatch != null || streamPickerChannel != null)) {
+        val currentMatch = streamPickerMatch
+        val currentChannel = streamPickerChannel
+        if (currentMatch != null) {
+            MultipleStreamsModalDialog(
+                streams = currentMatch.streams,
+                currentSelectedStream = currentMatch.streams.firstOrNull(),
+                matchTitle = "${currentMatch.team1Name} vs ${currentMatch.team2Name}",
+                matchTournament = currentMatch.tournament,
+                matchStatus = currentMatch.status.name,
+                onStreamSelected = { selected ->
+                    startPlaying(currentMatch, null, listOf(selected) + currentMatch.streams.filter { it.id != selected.id })
+                },
+                onDismiss = {
+                    showStreamPickerModal = false
+                    streamPickerMatch = null
+                }
+            )
+        } else if (currentChannel != null) {
+            MultipleStreamsModalDialog(
+                streams = currentChannel.streams,
+                currentSelectedStream = currentChannel.streams.firstOrNull(),
+                matchTitle = currentChannel.name,
+                matchTournament = currentChannel.category.uppercase(),
+                matchStatus = "LIVE",
+                onStreamSelected = { selected ->
+                    startPlaying(null, currentChannel.name, listOf(selected) + currentChannel.streams.filter { it.id != selected.id })
+                },
+                onDismiss = {
+                    showStreamPickerModal = false
+                    streamPickerChannel = null
+                }
+            )
+        }
     }
 
     // Modal: Network stream URL player
@@ -452,6 +576,12 @@ fun FootballLiveTvApp(
     if (showScoresDialog) {
         LiveScoresModalDialog(
             sportTitle = scoresSportTitle,
+            matches = matches,
+            onWatchMatch = { match ->
+                streamPickerMatch = match
+                streamPickerChannel = null
+                showStreamPickerModal = true
+            },
             onDismiss = { showScoresDialog = false }
         )
     }

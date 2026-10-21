@@ -471,9 +471,18 @@ fun HighlightsDialog(
 @Composable
 fun LiveScoresModalDialog(
     sportTitle: String,
+    matches: List<com.example.data.model.LiveMatch> = emptyList(),
+    onWatchMatch: (com.example.data.model.LiveMatch) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(if (sportTitle.contains("Cricket", ignoreCase = true)) 0 else 1) }
+
+    val cricketMatches = remember(matches) {
+        matches.filter { it.sport == com.example.data.model.SportType.CRICKET }
+    }
+    val footballMatches = remember(matches) {
+        matches.filter { it.sport == com.example.data.model.SportType.FOOTBALL }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -503,7 +512,7 @@ fun LiveScoresModalDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Live Match Center",
+                            text = "Real-Time Match Center",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary,
@@ -529,231 +538,171 @@ fun LiveScoresModalDialog(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
                         text = {
-                            Text("Cricket Live", fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal, color = if (selectedTab == 0) CyanAccent else TextSecondary)
+                            Text(
+                                "🏏 Cricket (${cricketMatches.size})",
+                                fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal,
+                                color = if (selectedTab == 0) CyanAccent else TextSecondary,
+                                fontSize = 12.sp
+                            )
                         }
                     )
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
                         text = {
-                            Text("Football Live", fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal, color = if (selectedTab == 1) CyanAccent else TextSecondary)
+                            Text(
+                                "⚽ Football (${footballMatches.size})",
+                                fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal,
+                                color = if (selectedTab == 1) CyanAccent else TextSecondary,
+                                fontSize = 12.sp
+                            )
                         }
                     )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                if (selectedTab == 0) {
-                    // CRICKET SCORECARD
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(1.dp, NavyBorder, RoundedCornerShape(12.dp)),
-                                colors = CardDefaults.cardColors(containerColor = NavySurface)
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "ODI TRI-SERIES • MATCH 2",
-                                            style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontWeight = FontWeight.Bold)
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(LiveRed)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text("LIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
+                val activeList = if (selectedTab == 0) cricketMatches else footballMatches
 
-                                    Spacer(modifier = Modifier.height(8.dp))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 430.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(activeList, key = { it.id }) { match ->
+                        val v1 = com.example.data.util.TeamFlagResolver.resolve(match.team1Name, match.team1Code, match.team1FlagUrl)
+                        val v2 = com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column {
-                                            Text("Pakistan 🇵🇰", fontWeight = FontWeight.Bold, color = TextPrimary)
-                                            Text("302/9 (50.0 ov)", color = TextSecondary, fontSize = 13.sp)
-                                        }
-                                        Column(horizontalAlignment = Alignment.End) {
-                                            Text("England 🏴󠁧󠁢󠁥󠁮󠁧󠁿", fontWeight = FontWeight.Bold, color = CyanAccent)
-                                            Text("156/3 (26.0 ov)", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 13.sp)
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(8.dp))
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(
+                                    1.dp,
+                                    if (match.status == com.example.data.model.MatchStatus.LIVE) CyanAccent.copy(alpha = 0.5f) else NavyBorder,
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable {
+                                    onWatchMatch(match)
+                                    onDismiss()
+                                },
+                            colors = CardDefaults.cardColors(containerColor = NavySurface)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
-                                        text = "England need 147 runs in 144 balls to win",
-                                        style = MaterialTheme.typography.bodySmall.copy(color = GoldYellow, fontWeight = FontWeight.Medium)
+                                        text = match.tournament,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = CyanAccent,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp
+                                        ),
+                                        maxLines = 1,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    Text(
-                                        text = "CRR: 6.00 • RRR: 6.12",
-                                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
-                                    )
-
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    HorizontalDivider(color = NavyBorder)
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    // Batsmen table
-                                    Text("BATTERS", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("J. Duckett *", color = TextPrimary, fontSize = 12.sp)
-                                        Text("45 (46b, 5x4, 1x6)", color = CyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    val badgeColor = when (match.status) {
+                                        com.example.data.model.MatchStatus.LIVE -> LiveRed
+                                        com.example.data.model.MatchStatus.UPCOMING -> SkyBlue
+                                        com.example.data.model.MatchStatus.FINISHED -> TextTertiary
                                     }
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("J. Root", color = TextPrimary, fontSize = 12.sp)
-                                        Text("30 (29b, 3x4)", color = TextPrimary, fontSize = 12.sp)
-                                    }
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    // Bowlers table
-                                    Text("BOWLERS", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Shaheen Afridi *", color = TextPrimary, fontSize = 12.sp)
-                                        Text("6.0 - 0 - 35 - 2", color = TextPrimary, fontSize = 12.sp)
-                                    }
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Haris Rauf", color = TextPrimary, fontSize = 12.sp)
-                                        Text("4.0 - 0 - 23 - 1", color = TextPrimary, fontSize = 12.sp)
-                                    }
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    // Recent Over
-                                    Text("RECENT BALLS: 1 • 4 • 0 • 2 • W • 1", color = GoldYellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // FOOTBALL SCORECARD
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(1.dp, NavyBorder, RoundedCornerShape(12.dp)),
-                                colors = CardDefaults.cardColors(containerColor = NavySurface)
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "UEFA CHAMPIONS LEAGUE",
-                                            style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontWeight = FontWeight.Bold)
-                                        )
-                                        Text(
-                                            text = "74' 2nd Half",
-                                            style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontWeight = FontWeight.Bold)
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.height(10.dp))
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                                            Text("PSG 🇫🇷", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp)
-                                        }
-                                        Text(
-                                            text = "2 - 1",
-                                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold, color = CyanAccent)
-                                        )
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                                            Text("Barcelona 🇪🇸", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp)
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    HorizontalDivider(color = NavyBorder)
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    Text("KEY MATCH EVENTS", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
-                                    Spacer(modifier = Modifier.height(6.dp))
-
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("⚽ 22'", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Goal: K. Mbappé (PSG)", color = TextPrimary, fontSize = 12.sp)
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("⚽ 54'", color = GoldYellow, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Goal: Lamine Yamal (Barcelona)", color = TextPrimary, fontSize = 12.sp)
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("⚽ 68'", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Goal: O. Dembélé (PSG)", color = TextPrimary, fontSize = 12.sp)
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🟨 71'", color = GoldYellow, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Yellow Card: Gavi (Barcelona)", color = TextSecondary, fontSize = 12.sp)
-                                    }
-
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    HorizontalDivider(color = NavyBorder)
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    Text("MATCH STATS", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
-                                    Spacer(modifier = Modifier.height(6.dp))
-
-                                    // Possession bar
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("56%", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Text("Possession", color = TextSecondary, fontSize = 11.sp)
-                                        Text("44%", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    }
-                                    LinearProgressIndicator(
-                                        progress = { 0.56f },
+                                    Box(
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(6.dp)
-                                            .clip(RoundedCornerShape(3.dp)),
-                                        color = CyanAccent,
-                                        trackColor = NavySurfaceVariant
-                                    )
-
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(badgeColor.copy(alpha = 0.2f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
-                                        Text("14 (8)", color = CyanAccent, fontSize = 12.sp)
-                                        Text("Shots (On Target)", color = TextSecondary, fontSize = 11.sp)
-                                        Text("10 (5)", color = TextPrimary, fontSize = 12.sp)
+                                        Text(
+                                            text = match.status.name,
+                                            color = badgeColor,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        com.example.ui.components.TeamFlagBadge(
+                                            flagUrl = v1.flagUrl,
+                                            emoji = v1.emoji,
+                                            code = v1.code
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "${v1.emoji} ${match.team1Name}",
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary,
+                                                fontSize = 13.sp,
+                                                maxLines = 1
+                                            )
+                                            Text(
+                                                text = v1.code,
+                                                color = TextSecondary,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(horizontal = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = match.timeOrScore,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = GoldYellow,
+                                            fontSize = 13.sp,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Text(
+                                            text = match.matchTime,
+                                            color = CyanAccent,
+                                            fontSize = 10.sp,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.End,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text = "${match.team2Name} ${v2.emoji}",
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary,
+                                                fontSize = 13.sp,
+                                                maxLines = 1,
+                                                textAlign = TextAlign.End
+                                            )
+                                            Text(
+                                                text = v2.code,
+                                                color = TextSecondary,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        com.example.ui.components.TeamFlagBadge(
+                                            flagUrl = v2.flagUrl,
+                                            emoji = v2.emoji,
+                                            code = v2.code
+                                        )
                                     }
                                 }
                             }

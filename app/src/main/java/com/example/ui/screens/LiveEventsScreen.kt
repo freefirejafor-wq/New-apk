@@ -51,7 +51,8 @@ fun LiveEventsScreen(
                 match.team2Name.contains(searchQuery, ignoreCase = true) ||
                 match.team1Code.contains(searchQuery, ignoreCase = true) ||
                 match.team2Code.contains(searchQuery, ignoreCase = true) ||
-                match.tournament.contains(searchQuery, ignoreCase = true)
+                match.tournament.contains(searchQuery, ignoreCase = true) ||
+                match.matchTime.contains(searchQuery, ignoreCase = true)
             }
             matchesSport && matchesStatus && matchesSearch
         }
@@ -72,8 +73,14 @@ fun LiveEventsScreen(
         ) {
             SportType.values().forEach { sport ->
                 val isSelected = sport == selectedSport
+                val count = if (sport == SportType.ALL) {
+                    matches.size
+                } else {
+                    matches.count { it.sport == sport }
+                }
                 SportIconBadgeItem(
                     sport = sport,
+                    count = count,
                     isSelected = isSelected,
                     onClick = { onSportSelect(sport) }
                 )
@@ -167,6 +174,7 @@ fun LiveEventsScreen(
 @Composable
 fun SportIconBadgeItem(
     sport: SportType,
+    count: Int = sport.badgeCount,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -216,22 +224,24 @@ fun SportIconBadgeItem(
         }
 
         // Notification badge count at top right
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = (-2).dp, y = (2).dp)
-                .clip(CircleShape)
-                .background(LiveRed)
-                .padding(horizontal = 4.dp, vertical = 1.dp)
-        ) {
-            Text(
-                text = sport.badgeCount.toString(),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    color = Color.White,
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.Bold
+        if (count > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-2).dp, y = (2).dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) CyanAccent else LiveRed)
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = count.toString(),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = if (isSelected) Color.Black else Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 )
-            )
+            }
         }
     }
 }

@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Football Live TV"
+rootProject.name = "SportzX Live TV"
 
 include(":app")

@@ -14,17 +14,21 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.SportsChannel
 import com.example.ui.theme.*
 
@@ -35,12 +39,19 @@ fun SportsChannelsScreen(
     onFavoriteToggle: (String) -> Unit,
     searchQuery: String = ""
 ) {
-    val filteredChannels = if (searchQuery.isBlank()) {
-        channels
-    } else {
-        channels.filter {
-            it.name.contains(searchQuery, ignoreCase = true) ||
-            it.category.contains(searchQuery, ignoreCase = true)
+    var selectedCategory by remember { mutableStateOf("All") }
+    val distinctCategories = remember(channels) {
+        listOf("All") + channels.map { it.category }.filter { it.isNotBlank() }.distinct()
+    }
+
+    val filteredChannels = remember(channels, searchQuery, selectedCategory) {
+        channels.filter { ch ->
+            val matchesCat = selectedCategory == "All" || ch.category.equals(selectedCategory, ignoreCase = true)
+            val matchesQuery = if (searchQuery.isBlank()) true else {
+                ch.name.contains(searchQuery, ignoreCase = true) ||
+                ch.category.contains(searchQuery, ignoreCase = true)
+            }
+            matchesCat && matchesQuery
         }
     }
 
@@ -50,10 +61,48 @@ fun SportsChannelsScreen(
             .background(NavyDark)
             .padding(horizontal = 12.dp)
     ) {
+        if (distinctCategories.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                distinctCategories.forEach { cat ->
+                    val isSelected = selectedCategory == cat
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { selectedCategory = cat },
+                        label = {
+                            Text(
+                                text = cat,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
+                            selectedLabelColor = CyanAccent,
+                            containerColor = NavySurface,
+                            labelColor = TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isSelected,
+                            borderColor = if (isSelected) CyanAccent else NavyBorder
+                        )
+                    )
+                }
+            }
+        }
+
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 80.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 80.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -98,18 +147,30 @@ fun SportsChannelGridItem(
                     .border(1.5.dp, NavyBorder, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                // If logoText is available, display styled text badge like in screenshot
-                val text = if (channel.logoText.isNotBlank()) channel.logoText else channel.name.take(4)
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        color = Color(0xFF0F172A),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 11.sp
-                    ),
-                    maxLines = 1,
-                    textAlign = TextAlign.Center
-                )
+                val logoUrl = channel.logoUrl.trim()
+                if (logoUrl.startsWith("http://", ignoreCase = true) || logoUrl.startsWith("https://", ignoreCase = true)) {
+                    AsyncImage(
+                        model = logoUrl,
+                        contentDescription = channel.name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(6.dp)
+                            .clip(CircleShape)
+                    )
+                } else {
+                    val text = if (channel.logoText.isNotBlank()) channel.logoText else channel.name.take(4)
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.sp
+                        ),
+                        maxLines = 1,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))

@@ -53,14 +53,14 @@ fun MenuScreen(
             modifier = Modifier
                 .size(76.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(Color.White)
-                .border(2.dp, NavyBorder, RoundedCornerShape(20.dp)),
+                .background(Color(0xFF070B19))
+                .border(2.dp, CyanAccent.copy(alpha = 0.6f), RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center
         ) {
             Image(
                 painter = painterResource(id = R.drawable.ic_app_logo),
                 contentDescription = "App Logo",
-                modifier = Modifier.size(68.dp)
+                modifier = Modifier.fillMaxSize()
             )
         }
 
@@ -139,7 +139,7 @@ fun MenuScreen(
             MenuItemCard(
                 icon = Icons.Default.SportsSoccer,
                 title = "Football Score",
-                subtitle = "UEFA, Premier League, LaLiga live tables",
+                subtitle = "FIFA World Cup, Nations League & International scores",
                 onClick = onFootballScoreClick
             )
 
@@ -307,7 +307,7 @@ fun MenuScreen(
 
         // Footer
         Text(
-            text = "MODDED & POWERED BY AI STUDIO ⚽",
+            text = "${config.appTitle.uppercase()} • ULTRA HD SPORTS STREAMING ⚽",
             style = MaterialTheme.typography.labelSmall.copy(
                 color = TextTertiary,
                 fontWeight = FontWeight.SemiBold,

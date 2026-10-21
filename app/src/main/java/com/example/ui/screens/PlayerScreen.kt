@@ -58,6 +58,7 @@ fun PlayerScreen(
     onBackClick: () -> Unit,
     otherMatches: List<LiveMatch> = emptyList(),
     onSwitchMatch: (LiveMatch) -> Unit = {},
+    onFavoriteToggle: (String) -> Unit = {},
     onEnterPiP: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -69,11 +70,13 @@ fun PlayerScreen(
     val isMuted by playerManager.isMuted.collectAsState()
     val currentPosition by playerManager.currentPosition.collectAsState()
     val duration by playerManager.duration.collectAsState()
+    val playbackSpeed by playerManager.playbackSpeed.collectAsState()
 
     var isFullscreen by remember { mutableStateOf(false) }
     var isControlsLocked by remember { mutableStateOf(false) }
     var showStreamPickerModal by remember { mutableStateOf(false) }
     var resizeMode by remember { mutableStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var autoFallbackCountdown by remember { mutableStateOf(0) }
 
     fun switchToNextAvailableStream() {
         val currentIndex = streams.indexOfFirst { it.id == currentStream?.id }
@@ -83,10 +86,19 @@ fun PlayerScreen(
         }
     }
 
-    // Auto switch to next stream on error
-    LaunchedEffect(errorMessage) {
+    // Auto switch to next backup stream on error after 3 seconds
+    LaunchedEffect(errorMessage, currentStream?.id) {
         if (errorMessage != null && streams.size > 1) {
-            // Give 3 seconds before auto-fallback so user sees error, or fallback
+            for (sec in 3 downTo 1) {
+                autoFallbackCountdown = sec
+                kotlinx.coroutines.delay(1000)
+            }
+            autoFallbackCountdown = 0
+            if (playerManager.errorMessage.value != null) {
+                switchToNextAvailableStream()
+            }
+        } else {
+            autoFallbackCountdown = 0
         }
     }
 
@@ -135,11 +147,17 @@ fun PlayerScreen(
                             player = playerManager.getPlayer()
                             useController = false
                             this.resizeMode = resizeMode
+                            this.keepScreenOn = true
                             layoutParams = FrameLayout.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT
                             )
                         }
+                    },
+                    update = { view ->
+                        view.player = playerManager.getPlayer()
+                        view.resizeMode = resizeMode
+                        view.keepScreenOn = isPlaying
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -180,7 +198,11 @@ fun PlayerScreen(
             }
         } else {
             // Portrait View: Video on top + horizontal streams + match info + other matches
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+            ) {
                 // Video Container (16:9 Aspect Ratio)
                 Box(
                     modifier = Modifier
@@ -194,11 +216,17 @@ fun PlayerScreen(
                                 player = playerManager.getPlayer()
                                 useController = false
                                 this.resizeMode = resizeMode
+                                this.keepScreenOn = true
                                 layoutParams = FrameLayout.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
                             }
+                        },
+                        update = { view ->
+                            view.player = playerManager.getPlayer()
+                            view.resizeMode = resizeMode
+                            view.keepScreenOn = isPlaying
                         },
                         modifier = Modifier.fillMaxSize()
                     )
@@ -212,7 +240,9 @@ fun PlayerScreen(
                         isLocked = isControlsLocked,
                         currentPosition = currentPosition,
                         duration = duration,
+                        playbackSpeed = playbackSpeed,
                         errorMessage = errorMessage,
+                        autoFallbackCountdown = autoFallbackCountdown,
                         onBack = onBackClick,
                         onToggleMute = { playerManager.toggleMute() },
                         onToggleLock = { isControlsLocked = !isControlsLocked },
@@ -220,6 +250,22 @@ fun PlayerScreen(
                         onRewind = { playerManager.seekRelative(-10_000) },
                         onForward = { playerManager.seekRelative(10_000) },
                         onSeekTo = { playerManager.seekTo(it) },
+                        onCycleSpeed = {
+                            val nextSpeed = when (playbackSpeed) {
+                                1.0f -> 1.25f
+                                1.25f -> 1.5f
+                                1.5f -> 0.75f
+                                else -> 1.0f
+                            }
+                            playerManager.setPlaybackSpeed(nextSpeed)
+                        },
+                        onToggleAspectRatio = {
+                            resizeMode = when (resizeMode) {
+                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            }
+                        },
                         onFullscreen = {
                             isFullscreen = true
                             (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -285,7 +331,7 @@ fun PlayerScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                TeamFlagBadge(flag = match.team1FlagUrl, code = match.team1Code)
+                                TeamFlagBadge(flag = match.team1FlagUrl, code = match.team1Code, teamName = match.team1Name)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(match.team1Name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary))
@@ -303,6 +349,15 @@ fun PlayerScreen(
                                         fontSize = 12.sp
                                     )
                                 )
+                                if (match.matchTime.isNotBlank()) {
+                                    Text(
+                                        text = match.matchTime,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = GoldYellow,
+                                            fontSize = 10.sp
+                                        )
+                                    )
+                                }
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -311,7 +366,7 @@ fun PlayerScreen(
                                     Text(match.team2Code, style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary), textAlign = TextAlign.End)
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
-                                TeamFlagBadge(flag = match.team2FlagUrl, code = match.team2Code)
+                                TeamFlagBadge(flag = match.team2FlagUrl, code = match.team2Code, teamName = match.team2Name)
                             }
                         }
                     }
@@ -345,7 +400,7 @@ fun PlayerScreen(
                                 MatchCard(
                                     match = other,
                                     onClick = { onSwitchMatch(other) },
-                                    onFavoriteToggle = { /* handled */ },
+                                    onFavoriteToggle = { onFavoriteToggle(other.id) },
                                     onStreamSelectClick = { onSwitchMatch(other) }
                                 )
                             }
@@ -429,7 +484,9 @@ fun PortraitVideoControlsOverlay(
     isLocked: Boolean,
     currentPosition: Long,
     duration: Long,
+    playbackSpeed: Float = 1.0f,
     errorMessage: String?,
+    autoFallbackCountdown: Int = 0,
     onBack: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleLock: () -> Unit,
@@ -437,6 +494,8 @@ fun PortraitVideoControlsOverlay(
     onRewind: () -> Unit,
     onForward: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onCycleSpeed: () -> Unit = {},
+    onToggleAspectRatio: () -> Unit = {},
     onFullscreen: () -> Unit,
     onPiP: () -> Unit,
     onRetry: () -> Unit,
@@ -461,13 +520,25 @@ fun PortraitVideoControlsOverlay(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Warning, contentDescription = null, tint = LiveRed, modifier = Modifier.size(36.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = errorMessage,
                         style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    if (autoFallbackCountdown > 0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Switching to next backup server in ${autoFallbackCountdown}s...",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = GoldYellow,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = onNextFallback,
@@ -549,8 +620,30 @@ fun PortraitVideoControlsOverlay(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Mute / Unmute Button matching screenshot 6/9
-                    IconButton(onClick = onToggleMute, modifier = Modifier.size(34.dp)) {
+                    // Speed Chip
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.White.copy(alpha = 0.15f))
+                            .clickable(onClick = onCycleSpeed)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "${playbackSpeed}x",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = CyanAccent,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp
+                            )
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                    // Aspect Ratio Button
+                    IconButton(onClick = onToggleAspectRatio, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.AspectRatio, contentDescription = "Aspect Ratio", tint = Color.White, modifier = Modifier.size(18.dp))
+                    }
+                    // Mute / Unmute Button
+                    IconButton(onClick = onToggleMute, modifier = Modifier.size(32.dp)) {
                         Icon(
                             if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                             contentDescription = if (isMuted) "Unmute" else "Mute",
@@ -559,15 +652,15 @@ fun PortraitVideoControlsOverlay(
                         )
                     }
                     // Lock Controls Button
-                    IconButton(onClick = onToggleLock, modifier = Modifier.size(34.dp)) {
+                    IconButton(onClick = onToggleLock, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.LockOpen, contentDescription = "Lock", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                     // PiP Button
-                    IconButton(onClick = onPiP, modifier = Modifier.size(34.dp)) {
+                    IconButton(onClick = onPiP, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.PictureInPictureAlt, contentDescription = "PiP", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                     // Fullscreen Button
-                    IconButton(onClick = onFullscreen, modifier = Modifier.size(34.dp)) {
+                    IconButton(onClick = onFullscreen, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(22.dp))
                     }
                 }

@@ -59,6 +59,7 @@ fun AdminPanelScreen(
 
     // Dialog states
     var showAddChannelDialog by remember { mutableStateOf(false) }
+    var channelBeingEdited by remember { mutableStateOf<SportsChannel?>(null) }
     var showAddMatchDialog by remember { mutableStateOf(false) }
     var matchBeingEdited by remember { mutableStateOf<LiveMatch?>(null) }
 
@@ -151,7 +152,14 @@ fun AdminPanelScreen(
                 AdminTab.CHANNELS -> {
                     ChannelsManagerTab(
                         channels = channels,
-                        onAddChannelClick = { showAddChannelDialog = true },
+                        onAddChannelClick = {
+                            channelBeingEdited = null
+                            showAddChannelDialog = true
+                        },
+                        onEditChannelClick = { ch ->
+                            channelBeingEdited = ch
+                            showAddChannelDialog = true
+                        },
                         onDeleteChannel = { repository.deleteChannel(it) },
                         onTestPlayStream = onTestPlayStream
                     )
@@ -192,13 +200,18 @@ fun AdminPanelScreen(
         }
     }
 
-    // Add Channel Dialog with Multiple Streams Available
+    // Add or Edit Channel Dialog with Multiple Streams Available
     if (showAddChannelDialog) {
         AddChannelModalDialog(
-            onDismiss = { showAddChannelDialog = false },
+            channelToEdit = channelBeingEdited,
+            onDismiss = {
+                showAddChannelDialog = false
+                channelBeingEdited = null
+            },
             onSaveChannel = { newChannel ->
                 repository.addOrUpdateChannel(newChannel)
                 showAddChannelDialog = false
+                channelBeingEdited = null
             },
             onCheckUrl = { url, callback ->
                 coroutineScope.launch {
@@ -462,6 +475,7 @@ fun M3U8StreamCheckerTab(
 fun ChannelsManagerTab(
     channels: List<SportsChannel>,
     onAddChannelClick: () -> Unit,
+    onEditChannelClick: (SportsChannel) -> Unit = {},
     onDeleteChannel: (String) -> Unit,
     onTestPlayStream: (StreamSource) -> Unit
 ) {
@@ -550,8 +564,13 @@ fun ChannelsManagerTab(
                             }
                         }
 
-                        IconButton(onClick = { onDeleteChannel(ch.id) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = LiveRed)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { onEditChannelClick(ch) }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = CyanAccent)
+                            }
+                            IconButton(onClick = { onDeleteChannel(ch.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = LiveRed)
+                            }
                         }
                     }
 
@@ -1422,24 +1441,30 @@ fun AppSettingsTab(
     }
 }
 
-// MODAL DIALOG: ADD CHANNEL WITH MULTIPLE STREAMS AVAILABLE
+// MODAL DIALOG: ADD OR EDIT CHANNEL WITH MULTIPLE STREAMS AVAILABLE
 @Composable
 fun AddChannelModalDialog(
+    channelToEdit: SportsChannel? = null,
     onDismiss: () -> Unit,
     onSaveChannel: (SportsChannel) -> Unit,
     onCheckUrl: (String, (M3U8CheckResult) -> Unit) -> Unit
 ) {
-    var channelName by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("Sports") }
-    var logoText by remember { mutableStateOf("") }
+    var channelName by remember(channelToEdit) { mutableStateOf(channelToEdit?.name ?: "") }
+    var category by remember(channelToEdit) { mutableStateOf(channelToEdit?.category ?: "Sports") }
+    var logoText by remember(channelToEdit) { mutableStateOf(channelToEdit?.logoText ?: "") }
+    var logoUrl by remember(channelToEdit) { mutableStateOf(channelToEdit?.logoUrl ?: "") }
 
     // Dynamic list of multiple streams
-    var streamsList by remember {
+    var streamsList by remember(channelToEdit) {
         mutableStateOf(
-            listOf(
-                StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
-                StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
-            )
+            if (channelToEdit != null && channelToEdit.streams.isNotEmpty()) {
+                channelToEdit.streams
+            } else {
+                listOf(
+                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
+                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
+                )
+            }
         )
     }
 
@@ -1460,7 +1485,7 @@ fun AddChannelModalDialog(
             ) {
                 item {
                     Text(
-                        text = "Add Channel & Multi-Streams",
+                        text = if (channelToEdit != null) "Edit Channel & Multi-Streams" else "Add Channel & Multi-Streams",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
@@ -1675,10 +1700,13 @@ fun AddChannelModalDialog(
                                 if (channelName.isNotBlank() && streamsList.isNotEmpty()) {
                                     onSaveChannel(
                                         SportsChannel(
+                                            id = channelToEdit?.id ?: UUID.randomUUID().toString(),
                                             name = channelName,
                                             category = category,
                                             logoText = logoText,
-                                            streams = streamsList.filter { it.url.isNotBlank() }
+                                            logoUrl = logoUrl,
+                                            streams = streamsList.filter { it.url.isNotBlank() },
+                                            isFavorite = channelToEdit?.isFavorite ?: false
                                         )
                                     )
                                 }
@@ -1704,17 +1732,18 @@ fun AddMatchModalDialog(
     onSaveMatch: (LiveMatch) -> Unit,
     onCheckUrl: (String, (M3U8CheckResult) -> Unit) -> Unit
 ) {
-    var tournament by remember(matchToEdit) { mutableStateOf(matchToEdit?.tournament ?: "CRICKET | ODI TRI-SERIES IN PAKISTAN") }
-    var sport by remember(matchToEdit) { mutableStateOf(matchToEdit?.sport ?: SportType.CRICKET) }
-    var team1Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Name ?: "Pakistan") }
-    var team1Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Code ?: "PAK") }
-    var team1Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1FlagUrl ?: "🇵🇰") }
+    var tournament by remember(matchToEdit) { mutableStateOf(matchToEdit?.tournament ?: "INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS") }
+    var sport by remember(matchToEdit) { mutableStateOf(matchToEdit?.sport ?: SportType.FOOTBALL) }
+    var team1Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Name ?: "Argentina") }
+    var team1Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Code ?: "ARG") }
+    var team1Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1FlagUrl ?: "https://flagcdn.com/w160/ar.png") }
 
-    var team2Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Name ?: "England") }
-    var team2Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Code ?: "ENG") }
-    var team2Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2FlagUrl ?: "🏴󠁧󠁢󠁥󠁮󠁧󠁿") }
+    var team2Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Name ?: "Brazil") }
+    var team2Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Code ?: "BRA") }
+    var team2Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2FlagUrl ?: "https://flagcdn.com/w160/br.png") }
 
-    var timeOrScore by remember(matchToEdit) { mutableStateOf(matchToEdit?.timeOrScore ?: "06:25:22") }
+    var timeOrScore by remember(matchToEdit) { mutableStateOf(matchToEdit?.timeOrScore ?: "2 - 1") }
+    var matchTime by remember(matchToEdit) { mutableStateOf(matchToEdit?.matchTime ?: "Today, 09:00 PM") }
     var status by remember(matchToEdit) { mutableStateOf(matchToEdit?.status ?: MatchStatus.LIVE) }
 
     var streamsList by remember(matchToEdit) {
@@ -1756,7 +1785,7 @@ fun AddMatchModalDialog(
                         )
                     )
                     Text(
-                        text = "Configure match details and all available stream servers/channels for viewers",
+                        text = "Configure match details, schedule time, automatic country/club flags, and stream servers",
                         style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
                     )
                 }
@@ -1775,7 +1804,14 @@ fun AddMatchModalDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(
                             value = team1Name,
-                            onValueChange = { team1Name = it },
+                            onValueChange = {
+                                team1Name = it
+                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
+                                if (resolved.flagUrl.isNotBlank()) {
+                                    team1Code = resolved.code
+                                    team1Flag = resolved.flagUrl
+                                }
+                            },
                             label = { Text("Team 1 Name") },
                             modifier = Modifier.weight(1.5f)
                         )
@@ -1783,13 +1819,14 @@ fun AddMatchModalDialog(
                             value = team1Code,
                             onValueChange = { team1Code = it },
                             label = { Text("Code") },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(0.8f)
                         )
                         OutlinedTextField(
                             value = team1Flag,
                             onValueChange = { team1Flag = it },
-                            label = { Text("Flag") },
-                            modifier = Modifier.weight(1f)
+                            label = { Text("Flag URL/Emoji") },
+                            modifier = Modifier.weight(1.2f),
+                            singleLine = true
                         )
                     }
                 }
@@ -1799,7 +1836,14 @@ fun AddMatchModalDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(
                             value = team2Name,
-                            onValueChange = { team2Name = it },
+                            onValueChange = {
+                                team2Name = it
+                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
+                                if (resolved.flagUrl.isNotBlank()) {
+                                    team2Code = resolved.code
+                                    team2Flag = resolved.flagUrl
+                                }
+                            },
                             label = { Text("Team 2 Name") },
                             modifier = Modifier.weight(1.5f)
                         )
@@ -1807,13 +1851,14 @@ fun AddMatchModalDialog(
                             value = team2Code,
                             onValueChange = { team2Code = it },
                             label = { Text("Code") },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(0.8f)
                         )
                         OutlinedTextField(
                             value = team2Flag,
                             onValueChange = { team2Flag = it },
-                            label = { Text("Flag") },
-                            modifier = Modifier.weight(1f)
+                            label = { Text("Flag URL/Emoji") },
+                            modifier = Modifier.weight(1.2f),
+                            singleLine = true
                         )
                     }
                 }
@@ -1823,9 +1868,62 @@ fun AddMatchModalDialog(
                         OutlinedTextField(
                             value = timeOrScore,
                             onValueChange = { timeOrScore = it },
-                            label = { Text("Live Time or Score") },
-                            modifier = Modifier.weight(1f)
+                            label = { Text("Score / Countdown") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
                         )
+                        OutlinedTextField(
+                            value = matchTime,
+                            onValueChange = { matchTime = it },
+                            label = { Text("Match Time / Date") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    // Sport & Status Selector Row
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "SPORT & MATCH STATUS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = TextSecondary,
+                                fontSize = 10.sp
+                            )
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            SportType.values().filter { it != SportType.ALL }.forEach { sType ->
+                                FilterChip(
+                                    selected = sport == sType,
+                                    onClick = { sport = sType },
+                                    label = { Text(sType.displayName, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
+                                        selectedLabelColor = CyanAccent
+                                    )
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            MatchStatus.values().forEach { st ->
+                                FilterChip(
+                                    selected = status == st,
+                                    onClick = { status = st },
+                                    label = { Text(st.name, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = if (st == MatchStatus.LIVE) LiveRed.copy(alpha = 0.2f) else GoldYellow.copy(alpha = 0.2f),
+                                        selectedLabelColor = if (st == MatchStatus.LIVE) LiveRed else GoldYellow
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -1865,6 +1963,7 @@ fun AddMatchModalDialog(
                     var sName by remember(s.id) { mutableStateOf(s.name) }
                     var sQuality by remember(s.id) { mutableStateOf(s.quality) }
                     var sUrl by remember(s.id) { mutableStateOf(s.url) }
+                    var testStatus by remember(s.id) { mutableStateOf<String?>(null) }
 
                     Card(
                         modifier = Modifier
@@ -1920,6 +2019,32 @@ fun AddMatchModalDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                testStatus?.let {
+                                    Text(
+                                        text = it,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = if (it.contains("Active")) LiveGreen else LiveRed,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp
+                                        )
+                                    )
+                                } ?: Spacer(modifier = Modifier.width(1.dp))
+
+                                TextButton(
+                                    onClick = {
+                                        onCheckUrl(sUrl) { res ->
+                                            testStatus = if (res.isOnline) "Active (${res.latencyMs}ms)" else "Offline"
+                                        }
+                                    }
+                                ) {
+                                    Text("Check M3U8", color = CyanAccent, fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -1940,19 +2065,24 @@ fun AddMatchModalDialog(
                         Button(
                             onClick = {
                                 if (team1Name.isNotBlank() && team2Name.isNotBlank()) {
+                                    val v1 = com.example.data.util.TeamFlagResolver.resolve(team1Name, team1Code, team1Flag)
+                                    val v2 = com.example.data.util.TeamFlagResolver.resolve(team2Name, team2Code, team2Flag)
                                     onSaveMatch(
                                         LiveMatch(
+                                            id = matchToEdit?.id ?: UUID.randomUUID().toString(),
                                             tournament = tournament,
                                             sport = sport,
                                             team1Name = team1Name,
-                                            team1Code = team1Code,
-                                            team1FlagUrl = team1Flag,
+                                            team1Code = v1.code,
+                                            team1FlagUrl = v1.flagUrl.ifBlank { v1.emoji },
                                             team2Name = team2Name,
-                                            team2Code = team2Code,
-                                            team2FlagUrl = team2Flag,
+                                            team2Code = v2.code,
+                                            team2FlagUrl = v2.flagUrl.ifBlank { v2.emoji },
                                             status = status,
                                             timeOrScore = timeOrScore,
-                                            streams = streamsList.filter { it.url.isNotBlank() }
+                                            matchTime = matchTime.ifBlank { "Today" },
+                                            streams = streamsList.filter { it.url.isNotBlank() },
+                                            isFavorite = matchToEdit?.isFavorite ?: false
                                         )
                                     )
                                 }

@@ -76,15 +76,15 @@ fun SplashScreen(
                     .scale(scale)
                     .size(116.dp)
                     .clip(RoundedCornerShape(26.dp))
-                    .background(Color.White)
-                    .border(2.dp, CyanAccent.copy(alpha = 0.5f), RoundedCornerShape(26.dp))
+                    .background(Color(0xFF070B19))
+                    .border(2.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(26.dp))
                     .testTag("splash_app_logo"),
                 contentAlignment = Alignment.Center
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.ic_app_logo),
-                    contentDescription = "Football Live Tv Logo",
-                    modifier = Modifier.size(96.dp)
+                    contentDescription = "SportzX Live TV Logo",
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 

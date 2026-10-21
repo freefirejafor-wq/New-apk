@@ -23,7 +23,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
 import com.example.data.model.SportsChannel
@@ -33,7 +35,7 @@ import com.example.ui.theme.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TopSportsBar(
-    title: String = "Football Live Tv",
+    title: String = "SportzX Live TV",
     onTelegramClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onSearchClick: () -> Unit,
@@ -44,7 +46,9 @@ fun TopSportsBar(
 ) {
     Surface(
         color = NavyDark,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
     ) {
         if (isSearching) {
             Row(
@@ -215,12 +219,33 @@ fun MatchCard(
     onFavoriteToggle: () -> Unit,
     onStreamSelectClick: () -> Unit
 ) {
+    val team1Visual = remember(match.team1Name, match.team1Code, match.team1FlagUrl) {
+        com.example.data.util.TeamFlagResolver.resolve(match.team1Name, match.team1Code, match.team1FlagUrl)
+    }
+    val team2Visual = remember(match.team2Name, match.team2Code, match.team2FlagUrl) {
+        com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
+    }
+
+    val sportIcon = when (match.sport) {
+        com.example.data.model.SportType.CRICKET -> Icons.Default.SportsCricket
+        com.example.data.model.SportType.FOOTBALL -> Icons.Default.SportsSoccer
+        com.example.data.model.SportType.BOXING -> Icons.Default.SportsMma
+        com.example.data.model.SportType.BASKETBALL -> Icons.Default.SportsBasketball
+        com.example.data.model.SportType.HOCKEY -> Icons.Default.SportsHockey
+        com.example.data.model.SportType.TENNIS -> Icons.Default.SportsTennis
+        else -> Icons.Default.Sports
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .border(1.dp, NavyBorder, RoundedCornerShape(14.dp))
+            .border(
+                width = if (match.status == MatchStatus.LIVE) 1.2.dp else 1.dp,
+                color = if (match.status == MatchStatus.LIVE) CyanAccent.copy(alpha = 0.55f) else NavyBorder,
+                shape = RoundedCornerShape(14.dp)
+            )
             .testTag("match_card_${match.id}"),
         colors = CardDefaults.cardColors(containerColor = NavySurface)
     ) {
@@ -237,16 +262,16 @@ fun MatchCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(18.dp)
-                            .clip(RoundedCornerShape(4.dp))
+                            .size(20.dp)
+                            .clip(RoundedCornerShape(5.dp))
                             .background(NavySurfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Sports,
+                            sportIcon,
                             contentDescription = null,
                             tint = CyanAccent,
-                            modifier = Modifier.size(12.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(6.dp))
@@ -254,7 +279,7 @@ fun MatchCard(
                         text = match.tournament,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            color = TextSecondary,
+                            color = CyanAccent,
                             fontSize = 11.sp
                         ),
                         maxLines = 1,
@@ -288,65 +313,115 @@ fun MatchCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    TeamFlagBadge(flag = match.team1FlagUrl, code = match.team1Code)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = match.team1Code,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        ),
-                        maxLines = 1
+                    TeamFlagBadge(
+                        flagUrl = team1Visual.flagUrl,
+                        emoji = team1Visual.emoji,
+                        code = team1Visual.code
                     )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = team1Visual.code,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = TextPrimary,
+                                    fontSize = 15.sp
+                                ),
+                                maxLines = 1
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = team1Visual.emoji,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Text(
+                            text = match.team1Name,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
-                // Center Live Status & Time
+                // Center Live Status, Score & Schedule Time
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(horizontal = 12.dp)
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 ) {
                     if (match.status == MatchStatus.LIVE) {
                         PulsingLiveBadge()
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = match.timeOrScore,
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = GoldYellow,
+                                fontSize = 13.sp
+                            ),
+                            textAlign = TextAlign.Center
+                        )
+                        if (match.matchTime.isNotBlank()) {
+                            Text(
+                                text = match.matchTime,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = CyanAccent,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else if (match.status == MatchStatus.UPCOMING) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(NavySurfaceVariant)
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = match.matchTime,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = SkyBlue,
+                                    fontSize = 11.sp
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = match.timeOrScore,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = GoldYellow,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp
+                            ),
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        Text(
+                            text = match.matchTime.ifBlank { "Full Time" },
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            textAlign = TextAlign.Center
+                        )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = match.timeOrScore,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.Bold,
-                                color = TextPrimary,
-                                fontSize = 12.sp
-                            )
-                        )
-                    } else if (match.status == MatchStatus.UPCOMING) {
-                        Text(
-                            text = match.matchTime,
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = SkyBlue,
-                                fontSize = 12.sp
-                            )
-                        )
-                        Text(
-                            text = match.timeOrScore,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = TextSecondary,
-                                fontSize = 10.sp
-                            )
-                        )
-                    } else {
-                        Text(
-                            text = "Finished",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = TextSecondary,
-                                fontSize = 11.sp
-                            )
-                        )
-                        Text(
-                            text = match.timeOrScore,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
                                 color = GoldYellow,
-                                fontSize = 11.sp
-                            )
+                                fontSize = 12.sp
+                            ),
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -357,40 +432,79 @@ fun MatchCard(
                     horizontalArrangement = Arrangement.End,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(
-                        text = match.team2Code,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        ),
-                        maxLines = 1,
-                        textAlign = TextAlign.End
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = team2Visual.emoji,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = team2Visual.code,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = TextPrimary,
+                                    fontSize = 15.sp
+                                ),
+                                maxLines = 1,
+                                textAlign = TextAlign.End
+                            )
+                        }
+                        Text(
+                            text = match.team2Name,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.End
+                        )
+                    }
                     Spacer(modifier = Modifier.width(10.dp))
-                    TeamFlagBadge(flag = match.team2FlagUrl, code = match.team2Code)
+                    TeamFlagBadge(
+                        flagUrl = team2Visual.flagUrl,
+                        emoji = team2Visual.emoji,
+                        code = team2Visual.code
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = NavyBorder.copy(alpha = 0.5f), thickness = 0.5.dp)
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Bottom stream indicator bar
+            // Bottom schedule & stream indicator bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "${match.team1Name} vs ${match.team2Name}",
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = TextSecondary,
-                        fontSize = 11.sp
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
-                )
+                ) {
+                    Icon(
+                        Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "${match.matchTime} • ${match.team1Name} vs ${match.team2Name}",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 if (match.streams.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
@@ -423,24 +537,60 @@ fun MatchCard(
 }
 
 @Composable
-fun TeamFlagBadge(flag: String, code: String) {
+fun TeamFlagBadge(
+    flag: String = "",
+    code: String = "",
+    flagUrl: String = flag,
+    emoji: String = "",
+    teamName: String = ""
+) {
+    val resolved = remember(flag, code, flagUrl, emoji, teamName) {
+        val lookupVisual = com.example.data.util.TeamFlagResolver.resolve(
+            teamName = teamName.ifBlank { code },
+            teamCode = code,
+            existingFlag = flagUrl.ifBlank { flag }
+        )
+        com.example.data.util.TeamFlagResolver.TeamVisual(
+            code = code.ifBlank { lookupVisual.code },
+            flagUrl = flagUrl.ifBlank { lookupVisual.flagUrl },
+            emoji = emoji.ifBlank { lookupVisual.emoji },
+            countryName = lookupVisual.countryName
+        )
+    }
+
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(40.dp)
             .clip(CircleShape)
             .background(NavySurfaceVariant)
-            .border(1.dp, NavyBorder, CircleShape),
+            .border(1.5.dp, CyanAccent.copy(alpha = 0.35f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        if (flag.isNotBlank()) {
-            Text(text = flag, fontSize = 20.sp)
+        // Fallback emoji or code always rendered underneath so it is never blank offline
+        if (resolved.emoji.isNotBlank() && resolved.emoji != "🏳️") {
+            Text(text = resolved.emoji, fontSize = 20.sp)
         } else {
             Text(
-                text = code.take(2).uppercase(),
+                text = resolved.code.take(3).uppercase(),
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = TextPrimary,
+                    fontSize = 10.sp
                 )
+            )
+        }
+
+        // High-resolution Flag / Club crest overlay via Coil
+        if (resolved.flagUrl.startsWith("http://", ignoreCase = true) ||
+            resolved.flagUrl.startsWith("https://", ignoreCase = true)
+        ) {
+            AsyncImage(
+                model = resolved.flagUrl,
+                contentDescription = resolved.code,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
             )
         }
     }

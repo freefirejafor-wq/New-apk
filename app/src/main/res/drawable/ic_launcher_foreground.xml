@@ -1,8 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="72dp"
-        android:height="72dp"
-        android:drawable="@drawable/ic_app_logo"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer glowing shield / stadium arena ring -->
+    <path
+        android:fillColor="#132A4A"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.5"
+        android:pathData="M54,22 L80,34 L80,60 C80,74 68,84 54,88 C40,84 28,74 28,60 L28,34 Z" />
+
+    <!-- Top Live Broadcast Signal Waves in Gold -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FACC15"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:pathData="M42,33 Q54,25 66,33" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M46,38 Q54,32 62,38" />
+
+    <!-- Live Red Pulse Dot at Top Center -->
+    <path
+        android:fillColor="#FF2E4C"
+        android:pathData="M54,38 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+
+    <!-- Center Play Button Badge -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M44,44 L44,68 L68,56 Z" />
+
+    <!-- Inner Gold Accent Lightning / Dynamic Slash -->
+    <path
+        android:fillColor="#FACC15"
+        android:pathData="M47,48 L47,64 L62,56 Z" />
+</vector>
