@@ -26,20 +26,17 @@ class ExampleRobolectricTest {
     fun `read string from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("Football Live TV", appName)
+        assertEquals("SportzX Live TV", appName)
     }
 
     @Test
-    fun `repository loads default matches with multiple streams`() {
+    fun `repository loads default football matches and updates cricket from CREX`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
         val matches = repository.matches.value
-        assertTrue("Matches should not be empty", matches.isNotEmpty())
-
-        val firstMatch = matches.first()
-        assertTrue("First match should have multiple stream servers", firstMatch.streams.size >= 2)
-        assertNotNull("Match tournament should not be null", firstMatch.tournament)
+        assertTrue("Matches should contain football matches initially", matches.isNotEmpty())
+        assertTrue("Cricket matches come only from CREX", matches.none { it.sport == SportType.CRICKET })
     }
 
     @Test
@@ -85,7 +82,24 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
-        val match = repository.matches.value.first()
+        val sampleCrexMatch = LiveMatch(
+            id = "10MR",
+            tournament = "CSA • Test",
+            sport = SportType.CRICKET,
+            status = MatchStatus.LIVE,
+            matchTime = "17 Oct 2026, 02:00 PM BST • SuperSport Park, Centurion",
+            timeOrScore = "RSA: 425/9 (127.1 ov) • AUS: 53/4 (21.4 ov) • Stumps",
+            team1Name = "South Africa",
+            team1Code = "RSA",
+            team2Name = "Australia",
+            team2Code = "AUS",
+            streams = listOf(
+                StreamSource(name = "SERVER 1 (FHD)", quality = "1080p FHD", url = "https://example.com/1.m3u8", isDefault = true)
+            )
+        )
+        repository.addOrUpdateMatch(sampleCrexMatch)
+
+        val match = repository.matches.value.first { it.id == "10MR" }
         val initialFav = match.isFavorite
 
         repository.toggleMatchFavorite(match.id)

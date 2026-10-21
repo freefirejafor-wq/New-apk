@@ -8,12 +8,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.LiveMatch
+import com.example.data.model.MatchStatus
 import com.example.data.model.SportsChannel
 import com.example.ui.components.MatchCard
 import com.example.ui.theme.*
@@ -26,9 +28,37 @@ fun FavouritesScreen(
     onChannelClick: (SportsChannel) -> Unit,
     onMatchFavoriteToggle: (String) -> Unit,
     onChannelFavoriteToggle: (String) -> Unit,
-    onStreamSelectClick: (LiveMatch) -> Unit
+    onStreamSelectClick: (LiveMatch) -> Unit,
+    searchQuery: String = ""
 ) {
-    val isEmpty = favoriteMatches.isEmpty() && favoriteChannels.isEmpty()
+    val filteredMatches = remember(favoriteMatches, searchQuery) {
+        if (searchQuery.isBlank()) favoriteMatches
+        else favoriteMatches.filter {
+            it.team1Name.contains(searchQuery, ignoreCase = true) ||
+                it.team2Name.contains(searchQuery, ignoreCase = true) ||
+                it.tournament.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
+    val filteredChannels = remember(favoriteChannels, searchQuery) {
+        if (searchQuery.isBlank()) favoriteChannels
+        else favoriteChannels.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                it.category.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
+    val liveFavMatches = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.LIVE }
+    }
+    val upcomingFavMatches = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.UPCOMING }
+    }
+    val finishedFavMatches = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.FINISHED }
+    }
+
+    val isEmpty = filteredMatches.isEmpty() && filteredChannels.isEmpty()
 
     Column(
         modifier = Modifier
@@ -76,19 +106,19 @@ fun FavouritesScreen(
                 contentPadding = PaddingValues(top = 10.dp, bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (favoriteMatches.isNotEmpty()) {
-                    item {
+                if (liveFavMatches.isNotEmpty()) {
+                    item(key = "fav_live_header") {
                         Text(
-                            text = "Pinned Matches (${favoriteMatches.size})",
+                            text = "LIVE PINNED MATCHES (${liveFavMatches.size})",
                             style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = CyanAccent,
-                                fontSize = 12.sp
+                                fontWeight = FontWeight.ExtraBold,
+                                color = LiveRed,
+                                fontSize = 11.sp
                             ),
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
-                    items(favoriteMatches, key = { "match_${it.id}" }) { match ->
+                    items(liveFavMatches, key = { "fav_live_${it.id}" }) { match ->
                         MatchCard(
                             match = match,
                             onClick = { onMatchClick(match) },
@@ -98,20 +128,64 @@ fun FavouritesScreen(
                     }
                 }
 
-                if (favoriteChannels.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
+                if (upcomingFavMatches.isNotEmpty()) {
+                    item(key = "fav_upcoming_header") {
                         Text(
-                            text = "Pinned Channels (${favoriteChannels.size})",
+                            text = "UPCOMING PINNED MATCHES (${upcomingFavMatches.size})",
                             style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = CyanAccent,
-                                fontSize = 12.sp
+                                fontWeight = FontWeight.ExtraBold,
+                                color = SkyBlue,
+                                fontSize = 11.sp
                             ),
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
-                    items(favoriteChannels, key = { "ch_${it.id}" }) { channel ->
+                    items(upcomingFavMatches, key = { "fav_up_${it.id}" }) { match ->
+                        MatchCard(
+                            match = match,
+                            onClick = { onMatchClick(match) },
+                            onFavoriteToggle = { onMatchFavoriteToggle(match.id) },
+                            onStreamSelectClick = { onStreamSelectClick(match) }
+                        )
+                    }
+                }
+
+                if (finishedFavMatches.isNotEmpty()) {
+                    item(key = "fav_fin_header") {
+                        Text(
+                            text = "FINISHED PINNED MATCHES (${finishedFavMatches.size})",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            ),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    items(finishedFavMatches, key = { "fav_fin_${it.id}" }) { match ->
+                        MatchCard(
+                            match = match,
+                            onClick = { onMatchClick(match) },
+                            onFavoriteToggle = { onMatchFavoriteToggle(match.id) },
+                            onStreamSelectClick = { onStreamSelectClick(match) }
+                        )
+                    }
+                }
+
+                if (filteredChannels.isNotEmpty()) {
+                    item(key = "fav_channels_header") {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "PINNED CHANNELS (${filteredChannels.size})",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = CyanAccent,
+                                fontSize = 11.sp
+                            ),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    items(filteredChannels, key = { "ch_${it.id}" }) { channel ->
                         SportsChannelGridItem(
                             channel = channel,
                             onClick = { onChannelClick(channel) },

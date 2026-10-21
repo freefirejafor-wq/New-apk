@@ -39,13 +39,16 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.data.model.LiveMatch
+import com.example.data.model.MatchStatus
 import com.example.data.model.StreamSource
 import com.example.player.ExoPlayerManager
+import com.example.ui.components.FinishedBadge
 import com.example.ui.components.MatchCard
 import com.example.ui.components.MultipleStreamsModalDialog
 import com.example.ui.components.PulsingLiveBadge
 import com.example.ui.components.QualityBadge
 import com.example.ui.components.TeamFlagBadge
+import com.example.ui.components.UpcomingBadge
 import com.example.ui.theme.*
 
 @OptIn(UnstableApi::class)
@@ -55,6 +58,7 @@ fun PlayerScreen(
     channelTitle: String? = null,
     streams: List<StreamSource>,
     playerManager: ExoPlayerManager,
+    forceLowQuality: Boolean = false,
     onBackClick: () -> Unit,
     otherMatches: List<LiveMatch> = emptyList(),
     onSwitchMatch: (LiveMatch) -> Unit = {},
@@ -82,7 +86,7 @@ fun PlayerScreen(
         val currentIndex = streams.indexOfFirst { it.id == currentStream?.id }
         if (streams.isNotEmpty()) {
             val nextIndex = if (currentIndex in 0 until streams.size - 1) currentIndex + 1 else 0
-            playerManager.playStream(streams[nextIndex])
+            playerManager.playStream(streams[nextIndex], forceLowQuality)
         }
     }
 
@@ -106,7 +110,7 @@ fun PlayerScreen(
     LaunchedEffect(streams) {
         if (streams.isNotEmpty() && currentStream == null) {
             val defaultStream = streams.find { it.isDefault } ?: streams.first()
-            playerManager.playStream(defaultStream)
+            playerManager.playStream(defaultStream, forceLowQuality)
         }
     }
 
@@ -272,7 +276,7 @@ fun PlayerScreen(
                         },
                         onPiP = onEnterPiP,
                         onRetry = {
-                            currentStream?.let { playerManager.playStream(it) }
+                            currentStream?.let { playerManager.playStream(it, forceLowQuality) }
                         },
                         onPickAnotherStream = { showStreamPickerModal = true },
                         onNextFallback = { switchToNextAvailableStream() }
@@ -295,7 +299,7 @@ fun PlayerScreen(
                             StreamChipButton(
                                 stream = stream,
                                 isSelected = isSelected,
-                                onClick = { playerManager.playStream(stream) }
+                                onClick = { playerManager.playStream(stream, forceLowQuality) }
                             )
                         }
 
@@ -314,7 +318,7 @@ fun PlayerScreen(
                     }
                 }
 
-                // Match details card or channel banner
+                // Match details card or channel banner (no small score clutter)
                 if (match != null) {
                     Card(
                         modifier = Modifier
@@ -330,21 +334,37 @@ fun PlayerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 TeamFlagBadge(flag = match.team1FlagUrl, code = match.team1Code, teamName = match.team1Name)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
-                                    Text(match.team1Name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary))
+                                    Text(
+                                        text = match.team1Name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                     Text(match.team1Code, style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary))
                                 }
                             }
 
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                PulsingLiveBadge()
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(horizontal = 6.dp)
+                            ) {
+                                when (match.status) {
+                                    MatchStatus.LIVE -> PulsingLiveBadge()
+                                    MatchStatus.UPCOMING -> UpcomingBadge()
+                                    MatchStatus.FINISHED -> FinishedBadge()
+                                }
+                                Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = match.timeOrScore,
+                                    text = "VS",
                                     style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.ExtraBold,
                                         color = CyanAccent,
                                         fontSize = 12.sp
                                     )
@@ -353,16 +373,27 @@ fun PlayerScreen(
                                     Text(
                                         text = match.matchTime,
                                         style = MaterialTheme.typography.labelSmall.copy(
-                                            color = GoldYellow,
-                                            fontSize = 10.sp
-                                        )
+                                            color = TextSecondary,
+                                            fontSize = 9.sp
+                                        ),
+                                        maxLines = 1
                                     )
                                 }
                             }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Column(horizontalAlignment = Alignment.End) {
-                                    Text(match.team2Name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary), textAlign = TextAlign.End)
+                                    Text(
+                                        text = match.team2Name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary),
+                                        textAlign = TextAlign.End,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                     Text(match.team2Code, style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary), textAlign = TextAlign.End)
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -415,8 +446,11 @@ fun PlayerScreen(
             MultipleStreamsModalDialog(
                 streams = streams,
                 currentSelectedStream = currentStream,
+                matchTitle = match?.let { "${it.team1Name} vs ${it.team2Name}" } ?: channelTitle,
+                matchTournament = match?.tournament,
+                matchStatus = match?.status?.name ?: "LIVE",
                 onStreamSelected = { selected ->
-                    playerManager.playStream(selected)
+                    playerManager.playStream(selected, forceLowQuality)
                 },
                 onDismiss = { showStreamPickerModal = false }
             )

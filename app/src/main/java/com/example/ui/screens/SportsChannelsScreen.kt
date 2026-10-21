@@ -3,10 +3,12 @@ package com.example.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,8 +16,6 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,21 +35,25 @@ import com.example.ui.theme.*
 @Composable
 fun SportsChannelsScreen(
     channels: List<SportsChannel>,
+    selectedCategory: String = "All",
+    onCategorySelect: (String) -> Unit = {},
     onChannelClick: (SportsChannel) -> Unit,
     onFavoriteToggle: (String) -> Unit,
     searchQuery: String = ""
 ) {
-    var selectedCategory by remember { mutableStateOf("All") }
     val distinctCategories = remember(channels) {
         listOf("All") + channels.map { it.category }.filter { it.isNotBlank() }.distinct()
     }
 
     val filteredChannels = remember(channels, searchQuery, selectedCategory) {
         channels.filter { ch ->
-            val matchesCat = selectedCategory == "All" || ch.category.equals(selectedCategory, ignoreCase = true)
+            val matchesCat = selectedCategory.equals("All", ignoreCase = true) ||
+                ch.category.equals(selectedCategory, ignoreCase = true) ||
+                (selectedCategory.equals("SPORTS", ignoreCase = true) && ch.category.contains("Sport", ignoreCase = true))
             val matchesQuery = if (searchQuery.isBlank()) true else {
                 ch.name.contains(searchQuery, ignoreCase = true) ||
-                ch.category.contains(searchQuery, ignoreCase = true)
+                    ch.category.contains(searchQuery, ignoreCase = true) ||
+                    ch.logoText.contains(searchQuery, ignoreCase = true)
             }
             matchesCat && matchesQuery
         }
@@ -70,10 +74,10 @@ fun SportsChannelsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 distinctCategories.forEach { cat ->
-                    val isSelected = selectedCategory == cat
+                    val isSelected = selectedCategory.equals(cat, ignoreCase = true)
                     FilterChip(
                         selected = isSelected,
-                        onClick = { selectedCategory = cat },
+                        onClick = { onCategorySelect(cat) },
                         label = {
                             Text(
                                 text = cat,
@@ -99,19 +103,53 @@ fun SportsChannelsScreen(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 80.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            items(filteredChannels, key = { it.id }) { channel ->
-                SportsChannelGridItem(
-                    channel = channel,
-                    onClick = { onChannelClick(channel) },
-                    onFavoriteToggle = { onFavoriteToggle(channel.id) }
-                )
+        if (filteredChannels.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.LiveTv,
+                        contentDescription = null,
+                        tint = TextTertiary,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "No channels found in \"$selectedCategory\"",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            color = TextSecondary,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { onCategorySelect("All") },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
+                    ) {
+                        Text("Show All Channels", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 80.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                items(filteredChannels, key = { it.id }) { channel ->
+                    SportsChannelGridItem(
+                        channel = channel,
+                        onClick = { onChannelClick(channel) },
+                        onFavoriteToggle = { onFavoriteToggle(channel.id) }
+                    )
+                }
             }
         }
     }
@@ -191,7 +229,9 @@ fun SportsChannelGridItem(
 
             // Streams count badge & Favorite star
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {

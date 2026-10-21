@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.crex.CrexDashboardState
 import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
 import com.example.data.model.SportType
@@ -32,30 +34,41 @@ import com.example.ui.theme.*
 @Composable
 fun LiveEventsScreen(
     matches: List<LiveMatch>,
+    crexState: CrexDashboardState = CrexDashboardState(),
     selectedSport: SportType,
     onSportSelect: (SportType) -> Unit,
     selectedStatus: MatchStatus?,
     onStatusSelect: (MatchStatus?) -> Unit,
+    onManualRefresh: () -> Unit = {},
     onMatchClick: (LiveMatch) -> Unit,
     onFavoriteToggle: (String) -> Unit,
     onStreamSelectClick: (LiveMatch) -> Unit,
     searchQuery: String = ""
 ) {
-    // Filter matches
+    // Filter matches strictly by Sport, Status, and Search Query
     val filteredMatches = remember(matches, selectedSport, selectedStatus, searchQuery) {
         matches.filter { match ->
-            val matchesSport = selectedSport == SportType.ALL || match.sport == selectedSport
-            val matchesStatus = selectedStatus == null || match.status == selectedStatus
-            val matchesSearch = if (searchQuery.isBlank()) true else {
+            val sportMatches = selectedSport == SportType.ALL || match.sport == selectedSport
+            val statusMatches = selectedStatus == null || match.status == selectedStatus
+            val queryMatches = if (searchQuery.isBlank()) true else {
                 match.team1Name.contains(searchQuery, ignoreCase = true) ||
-                match.team2Name.contains(searchQuery, ignoreCase = true) ||
-                match.team1Code.contains(searchQuery, ignoreCase = true) ||
-                match.team2Code.contains(searchQuery, ignoreCase = true) ||
-                match.tournament.contains(searchQuery, ignoreCase = true) ||
-                match.matchTime.contains(searchQuery, ignoreCase = true)
+                    match.team2Name.contains(searchQuery, ignoreCase = true) ||
+                    match.team1Code.contains(searchQuery, ignoreCase = true) ||
+                    match.team2Code.contains(searchQuery, ignoreCase = true) ||
+                    match.tournament.contains(searchQuery, ignoreCase = true)
             }
-            matchesSport && matchesStatus && matchesSearch
+            sportMatches && statusMatches && queryMatches
         }
+    }
+
+    val liveMatchesList = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.LIVE }
+    }
+    val upcomingMatchesList = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.UPCOMING }
+    }
+    val finishedMatchesList = remember(filteredMatches) {
+        filteredMatches.filter { it.status == MatchStatus.FINISHED }
     }
 
     Column(
@@ -63,69 +76,77 @@ fun LiveEventsScreen(
             .fillMaxSize()
             .background(NavyDark)
     ) {
-        // Sports Icons Horizontal Carousel with Badges
+        // Sport Type Filter Row (All, Cricket, Football, etc. with icons)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SportType.values().forEach { sport ->
                 val isSelected = sport == selectedSport
-                val count = if (sport == SportType.ALL) {
-                    matches.size
-                } else {
-                    matches.count { it.sport == sport }
+                val icon = when (sport) {
+                    SportType.ALL -> Icons.Default.GridView
+                    SportType.CRICKET -> Icons.Default.SportsCricket
+                    SportType.FOOTBALL -> Icons.Default.SportsSoccer
+                    SportType.BOXING -> Icons.Default.SportsMma
+                    SportType.BASKETBALL -> Icons.Default.SportsBasketball
+                    SportType.HOCKEY -> Icons.Default.SportsHockey
+                    SportType.TENNIS -> Icons.Default.SportsTennis
+                    else -> Icons.Default.SportsMotorsports
                 }
-                SportIconBadgeItem(
-                    sport = sport,
-                    count = count,
+
+                SportFilterChip(
+                    label = sport.displayName,
+                    icon = icon,
                     isSelected = isSelected,
                     onClick = { onSportSelect(sport) }
                 )
             }
         }
 
-        // Status Filter Chips: All, Live, Upcoming, Finished
+        // Status Filter Row (All, Live, Upcoming, Finished)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            val totalCount = matches.size
-            val liveCount = matches.count { it.status == MatchStatus.LIVE }
-            val upcomingCount = matches.count { it.status == MatchStatus.UPCOMING }
-            val finishedCount = matches.count { it.status == MatchStatus.FINISHED }
-
             StatusFilterChip(
-                label = "All ($totalCount)",
+                label = "All",
                 isSelected = selectedStatus == null,
-                icon = Icons.Default.Check,
-                onClick = { onStatusSelect(null) }
+                accentColor = CyanAccent,
+                onClick = { onStatusSelect(null) },
+                tag = "filter_all"
             )
             StatusFilterChip(
-                label = "Live ($liveCount)",
+                label = "Live",
                 isSelected = selectedStatus == MatchStatus.LIVE,
-                onClick = { onStatusSelect(MatchStatus.LIVE) }
+                accentColor = LiveRed,
+                onClick = { onStatusSelect(if (selectedStatus == MatchStatus.LIVE) null else MatchStatus.LIVE) },
+                tag = "filter_live"
             )
             StatusFilterChip(
-                label = "Upcoming ($upcomingCount)",
+                label = "Upcoming",
                 isSelected = selectedStatus == MatchStatus.UPCOMING,
-                onClick = { onStatusSelect(MatchStatus.UPCOMING) }
+                accentColor = SkyBlue,
+                onClick = { onStatusSelect(if (selectedStatus == MatchStatus.UPCOMING) null else MatchStatus.UPCOMING) },
+                tag = "filter_upcoming"
             )
             StatusFilterChip(
-                label = "Finished ($finishedCount)",
+                label = "Finished",
                 isSelected = selectedStatus == MatchStatus.FINISHED,
-                onClick = { onStatusSelect(MatchStatus.FINISHED) }
+                accentColor = TextSecondary,
+                onClick = { onStatusSelect(if (selectedStatus == MatchStatus.FINISHED) null else MatchStatus.FINISHED) },
+                tag = "filter_finished"
             )
         }
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Match Cards List
         if (filteredMatches.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -135,18 +156,26 @@ fun LiveEventsScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        Icons.Default.SportsScore,
+                        Icons.Default.SportsSoccer,
                         contentDescription = null,
                         tint = TextTertiary,
                         modifier = Modifier.size(56.dp)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "No matches found",
-                        style = MaterialTheme.typography.bodyLarge.copy(
+                        text = "No Matches Found",
+                        style = MaterialTheme.typography.titleMedium.copy(
                             color = TextSecondary,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Bold
                         )
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Try selecting another sport or status filter.",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = TextTertiary
+                        ),
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -154,17 +183,86 @@ fun LiveEventsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(filteredMatches, key = { it.id }) { match ->
-                    MatchCard(
-                        match = match,
-                        onClick = { onMatchClick(match) },
-                        onFavoriteToggle = { onFavoriteToggle(match.id) },
-                        onStreamSelectClick = { onStreamSelectClick(match) }
-                    )
+                if (selectedStatus != null) {
+                    item {
+                        SectionBannerHeader(
+                            title = when (selectedStatus) {
+                                MatchStatus.LIVE -> "LIVE MATCHES (${filteredMatches.size})"
+                                MatchStatus.UPCOMING -> "UPCOMING SCHEDULE (${filteredMatches.size})"
+                                MatchStatus.FINISHED -> "FINISHED MATCHES (${filteredMatches.size})"
+                            },
+                            dotColor = when (selectedStatus) {
+                                MatchStatus.LIVE -> LiveRed
+                                MatchStatus.UPCOMING -> SkyBlue
+                                MatchStatus.FINISHED -> TextSecondary
+                            }
+                        )
+                    }
+                    items(filteredMatches, key = { "${it.status}_${it.id}" }) { match ->
+                        MatchCard(
+                            match = match,
+                            onClick = { onMatchClick(match) },
+                            onFavoriteToggle = { onFavoriteToggle(match.id) },
+                            onStreamSelectClick = { onStreamSelectClick(match) }
+                        )
+                    }
+                } else {
+                    if (liveMatchesList.isNotEmpty()) {
+                        item {
+                            SectionBannerHeader(
+                                title = "LIVE NOW (${liveMatchesList.size})",
+                                dotColor = LiveRed
+                            )
+                        }
+                        items(liveMatchesList, key = { "live_${it.id}" }) { match ->
+                            MatchCard(
+                                match = match,
+                                onClick = { onMatchClick(match) },
+                                onFavoriteToggle = { onFavoriteToggle(match.id) },
+                                onStreamSelectClick = { onStreamSelectClick(match) }
+                            )
+                        }
+                    }
+
+                    if (upcomingMatchesList.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SectionBannerHeader(
+                                title = "UPCOMING SCHEDULE (${upcomingMatchesList.size})",
+                                dotColor = SkyBlue
+                            )
+                        }
+                        items(upcomingMatchesList, key = { "up_${it.id}" }) { match ->
+                            MatchCard(
+                                match = match,
+                                onClick = { onMatchClick(match) },
+                                onFavoriteToggle = { onFavoriteToggle(match.id) },
+                                onStreamSelectClick = { onStreamSelectClick(match) }
+                            )
+                        }
+                    }
+
+                    if (finishedMatchesList.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SectionBannerHeader(
+                                title = "FINISHED MATCHES (${finishedMatchesList.size})",
+                                dotColor = TextSecondary
+                            )
+                        }
+                        items(finishedMatchesList, key = { "fin_${it.id}" }) { match ->
+                            MatchCard(
+                                match = match,
+                                onClick = { onMatchClick(match) },
+                                onFavoriteToggle = { onFavoriteToggle(match.id) },
+                                onStreamSelectClick = { onStreamSelectClick(match) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -172,112 +270,111 @@ fun LiveEventsScreen(
 }
 
 @Composable
-fun SportIconBadgeItem(
-    sport: SportType,
-    count: Int = sport.badgeCount,
+private fun SectionBannerHeader(
+    title: String,
+    dotColor: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(dotColor)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontWeight = FontWeight.ExtraBold,
+                color = TextPrimary,
+                fontSize = 12.sp,
+                letterSpacing = 0.6.sp
+            )
+        )
+    }
+}
+
+@Composable
+private fun SportFilterChip(
+    label: String,
+    icon: ImageVector,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val bgColor = if (isSelected) CyanAccent else NavySurface
+    val contentColor = if (isSelected) Color.Black else TextSecondary
     val borderColor = if (isSelected) CyanAccent else NavyBorder
-    val containerBg = if (isSelected) NavySurfaceVariant else NavySurface
 
-    val icon: ImageVector = when (sport) {
-        SportType.ALL -> Icons.Default.AllInclusive
-        SportType.CRICKET -> Icons.Default.SportsCricket
-        SportType.FOOTBALL -> Icons.Default.SportsSoccer
-        SportType.BOXING -> Icons.Default.SportsMma
-        SportType.BASKETBALL -> Icons.Default.SportsBasketball
-        SportType.RACING -> Icons.Default.DirectionsCar
-        SportType.HOCKEY -> Icons.Default.SportsHockey
-        SportType.TENNIS -> Icons.Default.SportsTennis
-    }
-
-    Box(
+    Surface(
         modifier = Modifier
-            .size(54.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(containerBg)
-            .border(1.5.dp, borderColor, RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .testTag("sport_tab_${sport.name.lowercase()}"),
-        contentAlignment = Alignment.Center
+            .testTag("sport_chip_${label.lowercase()}"),
+        color = bgColor,
+        shape = RoundedCornerShape(12.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = sport.displayName,
-                tint = if (isSelected) CyanAccent else TextSecondary,
-                modifier = Modifier.size(22.dp)
+                contentDescription = label,
+                tint = contentColor,
+                modifier = Modifier.size(16.dp)
             )
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = sport.displayName,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 9.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isSelected) CyanAccent else TextSecondary
+                text = label,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = contentColor,
+                    fontSize = 12.sp
                 )
             )
-        }
-
-        // Notification badge count at top right
-        if (count > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = (-2).dp, y = (2).dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) CyanAccent else LiveRed)
-                    .padding(horizontal = 4.dp, vertical = 1.dp)
-            ) {
-                Text(
-                    text = count.toString(),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = if (isSelected) Color.Black else Color.White,
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-            }
         }
     }
 }
 
 @Composable
-fun StatusFilterChip(
+private fun StatusFilterChip(
     label: String,
     isSelected: Boolean,
-    icon: ImageVector? = null,
-    onClick: () -> Unit
+    accentColor: Color,
+    onClick: () -> Unit,
+    tag: String
 ) {
-    val containerColor = if (isSelected) NavySurfaceVariant else NavySurface
-    val borderColor = if (isSelected) CyanAccent else NavyBorder
-    val textColor = if (isSelected) CyanAccent else TextSecondary
+    val bgColor = if (isSelected) accentColor.copy(alpha = 0.18f) else NavySurface
+    val borderColor = if (isSelected) accentColor else NavyBorder
+    val textColor = if (isSelected) accentColor else TextSecondary
 
     Surface(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .border(1.dp, borderColor, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
-            .testTag("chip_${label.lowercase()}"),
-        color = containerColor,
+            .testTag(tag),
+        color = bgColor,
         shape = RoundedCornerShape(20.dp)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = textColor,
-                    modifier = Modifier.size(14.dp)
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(accentColor)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
             }
             Text(
                 text = label,

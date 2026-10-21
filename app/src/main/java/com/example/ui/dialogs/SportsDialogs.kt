@@ -84,7 +84,28 @@ fun NetworkStreamDialog(
                     maxLines = 3
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Quick Test Stream:",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
+                    )
+                    TextButton(
+                        onClick = {
+                            title = "Akamai FHD Live"
+                            url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
+                        }
+                    ) {
+                        Text("Load Sample HLS", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -312,6 +333,7 @@ https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
                             if (input.isNotBlank()) {
                                 isImporting = true
                                 onImport(input.trim())
+                                onDismiss()
                             }
                         },
                         enabled = input.isNotBlank() && !isImporting,
@@ -476,12 +498,19 @@ fun LiveScoresModalDialog(
     onDismiss: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(if (sportTitle.contains("Cricket", ignoreCase = true)) 0 else 1) }
+    var selectedStatusFilter by remember { mutableStateOf<com.example.data.model.MatchStatus?>(null) }
 
     val cricketMatches = remember(matches) {
         matches.filter { it.sport == com.example.data.model.SportType.CRICKET }
     }
     val footballMatches = remember(matches) {
         matches.filter { it.sport == com.example.data.model.SportType.FOOTBALL }
+    }
+
+    val sportMatches = if (selectedTab == 0) cricketMatches else footballMatches
+    val activeList = remember(sportMatches, selectedStatusFilter) {
+        if (selectedStatusFilter == null) sportMatches
+        else sportMatches.filter { it.status == selectedStatusFilter }
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -512,7 +541,7 @@ fun LiveScoresModalDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Real-Time Match Center",
+                            text = "International Match Center",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary,
@@ -560,148 +589,194 @@ fun LiveScoresModalDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                val activeList = if (selectedTab == 0) cricketMatches else footballMatches
-
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 430.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                // Status Filter Row: All, Live, Upcoming, Finished
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(activeList, key = { it.id }) { match ->
-                        val v1 = com.example.data.util.TeamFlagResolver.resolve(match.team1Name, match.team1Code, match.team1FlagUrl)
-                        val v2 = com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
+                    val liveCount = sportMatches.count { it.status == com.example.data.model.MatchStatus.LIVE }
+                    val upCount = sportMatches.count { it.status == com.example.data.model.MatchStatus.UPCOMING }
+                    val finCount = sportMatches.count { it.status == com.example.data.model.MatchStatus.FINISHED }
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(
-                                    1.dp,
-                                    if (match.status == com.example.data.model.MatchStatus.LIVE) CyanAccent.copy(alpha = 0.5f) else NavyBorder,
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .clickable {
-                                    onWatchMatch(match)
-                                    onDismiss()
-                                },
-                            colors = CardDefaults.cardColors(containerColor = NavySurface)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = match.tournament,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = CyanAccent,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 10.sp
-                                        ),
-                                        maxLines = 1,
-                                        modifier = Modifier.weight(1f)
+                    FilterChip(
+                        selected = selectedStatusFilter == null,
+                        onClick = { selectedStatusFilter = null },
+                        label = { Text("All (${sportMatches.size})", fontSize = 10.sp) }
+                    )
+                    FilterChip(
+                        selected = selectedStatusFilter == com.example.data.model.MatchStatus.LIVE,
+                        onClick = { selectedStatusFilter = com.example.data.model.MatchStatus.LIVE },
+                        label = { Text("Live ($liveCount)", fontSize = 10.sp) }
+                    )
+                    FilterChip(
+                        selected = selectedStatusFilter == com.example.data.model.MatchStatus.UPCOMING,
+                        onClick = { selectedStatusFilter = com.example.data.model.MatchStatus.UPCOMING },
+                        label = { Text("Upcoming ($upCount)", fontSize = 10.sp) }
+                    )
+                    FilterChip(
+                        selected = selectedStatusFilter == com.example.data.model.MatchStatus.FINISHED,
+                        onClick = { selectedStatusFilter = com.example.data.model.MatchStatus.FINISHED },
+                        label = { Text("Done ($finCount)", fontSize = 10.sp) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (activeList.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No matches returned by CREX for this tab.",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 390.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(activeList, key = { "${it.status}_${it.id}" }) { match ->
+                            val v1 = com.example.data.util.TeamFlagResolver.resolve(match.team1Name, match.team1Code, match.team1FlagUrl)
+                            val v2 = com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(
+                                        1.dp,
+                                        if (match.status == com.example.data.model.MatchStatus.LIVE) CyanAccent.copy(alpha = 0.5f) else NavyBorder,
+                                        RoundedCornerShape(12.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    val badgeColor = when (match.status) {
-                                        com.example.data.model.MatchStatus.LIVE -> LiveRed
-                                        com.example.data.model.MatchStatus.UPCOMING -> SkyBlue
-                                        com.example.data.model.MatchStatus.FINISHED -> TextTertiary
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(badgeColor.copy(alpha = 0.2f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .clickable {
+                                        onWatchMatch(match)
+                                        onDismiss()
+                                    },
+                                colors = CardDefaults.cardColors(containerColor = NavySurface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = match.status.name,
-                                            color = badgeColor,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        com.example.ui.components.TeamFlagBadge(
-                                            flagUrl = v1.flagUrl,
-                                            emoji = v1.emoji,
-                                            code = v1.code
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column {
-                                            Text(
-                                                text = "${v1.emoji} ${match.team1Name}",
+                                            text = match.tournament,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = CyanAccent,
                                                 fontWeight = FontWeight.Bold,
-                                                color = TextPrimary,
-                                                fontSize = 13.sp,
-                                                maxLines = 1
-                                            )
-                                            Text(
-                                                text = v1.code,
-                                                color = TextSecondary,
                                                 fontSize = 10.sp
+                                            ),
+                                            maxLines = 1,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        when (match.status) {
+                                            com.example.data.model.MatchStatus.LIVE -> com.example.ui.components.PulsingLiveBadge()
+                                            com.example.data.model.MatchStatus.UPCOMING -> com.example.ui.components.UpcomingBadge()
+                                            com.example.data.model.MatchStatus.FINISHED -> com.example.ui.components.FinishedBadge()
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            com.example.ui.components.TeamFlagBadge(
+                                                flagUrl = v1.flagUrl,
+                                                emoji = v1.emoji,
+                                                code = v1.code
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "${v1.emoji} ${match.team1Name}",
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary,
+                                                    fontSize = 13.sp,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    text = v1.code,
+                                                    color = TextSecondary,
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
+
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.padding(horizontal = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "VS",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = CyanAccent,
+                                                fontSize = 13.sp,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.End,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Column(horizontalAlignment = Alignment.End) {
+                                                Text(
+                                                    text = "${match.team2Name} ${v2.emoji}",
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary,
+                                                    fontSize = 13.sp,
+                                                    maxLines = 1,
+                                                    textAlign = TextAlign.End
+                                                )
+                                                Text(
+                                                    text = v2.code,
+                                                    color = TextSecondary,
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            com.example.ui.components.TeamFlagBadge(
+                                                flagUrl = v2.flagUrl,
+                                                emoji = v2.emoji,
+                                                code = v2.code
                                             )
                                         }
                                     }
 
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.padding(horizontal = 6.dp)
-                                    ) {
+                                    if (match.timeOrScore.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
                                         Text(
                                             text = match.timeOrScore,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = GoldYellow,
-                                            fontSize = 13.sp,
-                                            textAlign = TextAlign.Center
-                                        )
-                                        Text(
-                                            text = match.matchTime,
-                                            color = CyanAccent,
-                                            fontSize = 10.sp,
-                                            textAlign = TextAlign.Center
+                                            color = if (match.status == com.example.data.model.MatchStatus.LIVE) GoldYellow else TextPrimary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 11.sp
                                         )
                                     }
 
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.End,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Column(horizontalAlignment = Alignment.End) {
-                                            Text(
-                                                text = "${match.team2Name} ${v2.emoji}",
-                                                fontWeight = FontWeight.Bold,
-                                                color = TextPrimary,
-                                                fontSize = 13.sp,
-                                                maxLines = 1,
-                                                textAlign = TextAlign.End
-                                            )
-                                            Text(
-                                                text = v2.code,
-                                                color = TextSecondary,
-                                                fontSize = 10.sp
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        com.example.ui.components.TeamFlagBadge(
-                                            flagUrl = v2.flagUrl,
-                                            emoji = v2.emoji,
-                                            code = v2.code
+                                    if (match.matchTime.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = match.matchTime,
+                                            color = TextSecondary,
+                                            fontSize = 10.sp
                                         )
                                     }
                                 }

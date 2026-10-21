@@ -348,81 +348,51 @@ fun MatchCard(
                     }
                 }
 
-                // Center Live Status, Score & Schedule Time
+                // Center Status Badge (LIVE / UPCOMING / FINISHED) & VS — no small score clutter
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 ) {
-                    if (match.status == MatchStatus.LIVE) {
-                        PulsingLiveBadge()
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = match.timeOrScore,
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                color = GoldYellow,
-                                fontSize = 13.sp
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                        if (match.matchTime.isNotBlank()) {
+                    when (match.status) {
+                        MatchStatus.LIVE -> {
+                            PulsingLiveBadge()
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = match.matchTime,
-                                style = MaterialTheme.typography.labelSmall.copy(
+                                text = "VS",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.ExtraBold,
                                     color = CyanAccent,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontSize = 13.sp
                                 ),
                                 textAlign = TextAlign.Center
                             )
                         }
-                    } else if (match.status == MatchStatus.UPCOMING) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(NavySurfaceVariant)
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
-                        ) {
+                        MatchStatus.UPCOMING -> {
+                            UpcomingBadge()
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = match.matchTime,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = SkyBlue,
-                                    fontSize = 11.sp
+                                text = "VS",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = TextPrimary,
+                                    fontSize = 13.sp
                                 ),
                                 textAlign = TextAlign.Center
                             )
                         }
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = match.timeOrScore,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = GoldYellow,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.sp
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                    } else {
-                        Text(
-                            text = match.matchTime.ifBlank { "Full Time" },
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = TextSecondary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = match.timeOrScore,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = GoldYellow,
-                                fontSize = 12.sp
-                            ),
-                            textAlign = TextAlign.Center
-                        )
+                        MatchStatus.FINISHED -> {
+                            FinishedBadge()
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "VS",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
 
@@ -485,14 +455,20 @@ fun MatchCard(
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
-                        Icons.Default.Schedule,
+                        if (match.status == MatchStatus.LIVE) Icons.Default.Sensors else Icons.Default.Schedule,
                         contentDescription = null,
-                        tint = TextSecondary,
-                        modifier = Modifier.size(13.dp)
+                        tint = if (match.status == MatchStatus.LIVE) LiveRed else CyanAccent,
+                        modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "${match.matchTime} • ${match.team1Name} vs ${match.team2Name}",
+                        text = match.matchTime.ifBlank {
+                            when (match.status) {
+                                MatchStatus.LIVE -> "Live Broadcast Now"
+                                MatchStatus.UPCOMING -> "Upcoming Schedule"
+                                MatchStatus.FINISHED -> "Match Completed"
+                            }
+                        },
                         style = MaterialTheme.typography.bodySmall.copy(
                             color = TextSecondary,
                             fontSize = 11.sp,
@@ -609,20 +585,68 @@ fun PulsingLiveBadge() {
         label = "alpha"
     )
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .clip(CircleShape)
-                .background(LiveRed.copy(alpha = alpha))
-        )
-        Spacer(modifier = Modifier.width(4.dp))
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(LiveRed.copy(alpha = 0.16f))
+            .border(0.8.dp, LiveRed.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(LiveRed.copy(alpha = alpha))
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "LIVE",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = LiveRed,
+                    fontSize = 10.sp
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun UpcomingBadge() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(SkyBlue.copy(alpha = 0.16f))
+            .border(0.8.dp, SkyBlue.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
         Text(
-            text = "Live",
+            text = "UPCOMING",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.ExtraBold,
+                color = SkyBlue,
+                fontSize = 10.sp
+            )
+        )
+    }
+}
+
+@Composable
+fun FinishedBadge() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(NavySurfaceVariant)
+            .border(0.8.dp, NavyBorder, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text = "FINISHED",
             style = MaterialTheme.typography.labelSmall.copy(
                 fontWeight = FontWeight.Bold,
-                color = LiveRed,
-                fontSize = 11.sp
+                color = TextSecondary,
+                fontSize = 10.sp
             )
         )
     }
@@ -635,6 +659,8 @@ fun MultipleStreamsModalDialog(
     matchTitle: String? = null,
     matchTournament: String? = null,
     matchStatus: String? = null,
+    matchDetailState: com.example.data.crex.CrexMatchDetailState? = null,
+    onRefreshDetail: (() -> Unit)? = null,
     onStreamSelected: (StreamSource) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -739,12 +765,12 @@ fun MultipleStreamsModalDialog(
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // List of streams
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     streams.forEach { stream ->
                         val isSelected = currentSelectedStream?.id == stream.id
@@ -759,14 +785,14 @@ fun MultipleStreamsModalDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Cancel button
                 OutlinedButton(
                     onClick = onDismiss,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(46.dp),
+                        .height(44.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = TextSecondary,

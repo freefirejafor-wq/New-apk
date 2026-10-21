@@ -27,6 +27,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
@@ -109,10 +112,12 @@ fun FootballLiveTvApp(
     onEnterPiP: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
     val matches by repository.matches.collectAsState()
+    val crexState by repository.crexDashboardState.collectAsState()
     val channels by repository.channels.collectAsState()
     val categories by repository.categories.collectAsState()
     val highlights by repository.highlights.collectAsState()
@@ -129,6 +134,7 @@ fun FootballLiveTvApp(
     // Filter states
     var selectedSport by remember { mutableStateOf(SportType.ALL) }
     var selectedStatus by remember { mutableStateOf<MatchStatus?>(null) }
+    var selectedChannelCategory by remember { mutableStateOf("All") }
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
 
@@ -141,17 +147,32 @@ fun FootballLiveTvApp(
     var showHighlightsDialog by remember { mutableStateOf(false) }
     var showAdminPinDialog by remember { mutableStateOf(false) }
     var showScoresDialog by remember { mutableStateOf(false) }
-    var scoresSportTitle by remember { mutableStateOf("Football") }
+    var scoresSportTitle by remember { mutableStateOf("Cricket") }
     var showAnnouncementBanner by remember { mutableStateOf(true) }
     var showTelegramDialog by remember { mutableStateOf(false) }
 
     val isPlayerPlaying by playerManager.isPlaying.collectAsState()
     val currentStream by playerManager.currentStream.collectAsState()
 
+    fun openMatchModal(match: LiveMatch) {
+        streamPickerMatch = match
+        streamPickerChannel = null
+        showStreamPickerModal = true
+        // Fetch getSV3 match details on-demand ONLY when a user opens a match
+        coroutineScope.launch {
+            repository.loadMatchDetailOnDemand(match.id, force = false)
+        }
+    }
+
     fun startPlaying(match: LiveMatch?, title: String?, streams: List<StreamSource>) {
         activeMatch = match
         activeChannelTitle = title
         activeStreams = streams
+        if (match != null) {
+            coroutineScope.launch {
+                repository.loadMatchDetailOnDemand(match.id, force = false)
+            }
+        }
         if (streams.isNotEmpty()) {
             val defaultStream = streams.find { it.isDefault } ?: streams.first()
             playerManager.playStream(defaultStream, config.forceLowQuality)
@@ -159,10 +180,31 @@ fun FootballLiveTvApp(
         currentScreen = AppScreen.PLAYER
     }
 
-    // Automatic background sync from remote feed on startup
-    LaunchedEffect(Unit) {
-        if (config.autoSyncOnLaunch && config.remoteFeedUrl.isNotBlank()) {
-            repository.syncFromRemoteFeed()
+    // 1. Auto-refresh Live list every 30 seconds ONLY while the app is visible (STARTED/RESUMED).
+    // Automatically stops polling when the app goes to background or is closed.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                repository.refreshLiveMatches(force = false)
+                delay(30_000L)
+            }
+        }
+    }
+
+    // 2. Refresh Upcoming every 15 minutes while the app is visible.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                repository.refreshUpcomingMatches(force = false)
+                delay(15 * 60_000L)
+            }
+        }
+    }
+
+    // 3. Refresh Finished when opened (or when All/Scores modal is opened) and then no more often than every 30 minutes.
+    LaunchedEffect(selectedStatus, showScoresDialog) {
+        if (selectedStatus == MatchStatus.FINISHED || selectedStatus == null || showScoresDialog) {
+            repository.refreshFinishedMatches(force = false)
         }
     }
 
@@ -183,6 +225,7 @@ fun FootballLiveTvApp(
                 channelTitle = activeChannelTitle,
                 streams = activeStreams,
                 playerManager = playerManager,
+                forceLowQuality = config.forceLowQuality,
                 onBackClick = {
                     currentScreen = AppScreen.MAIN_TABS
                 },
@@ -221,11 +264,11 @@ fun FootballLiveTvApp(
                             onTelegramClick = { showTelegramDialog = true },
                             onRefreshClick = {
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Checking for live match & channel updates...")
+                                    snackbarHostState.showSnackbar("Refreshing 2026 live & upcoming matches...")
                                     val res = repository.syncFromRemoteFeed()
                                     res.fold(
                                         onSuccess = { count ->
-                                            snackbarHostState.showSnackbar("Synced $count items from online feed successfully!")
+                                            snackbarHostState.showSnackbar("Updated $count live & upcoming matches!")
                                         },
                                         onFailure = { err ->
                                             snackbarHostState.showSnackbar("Sync: ${err.localizedMessage ?: "Network error"}")
@@ -383,18 +426,52 @@ fun FootballLiveTvApp(
                         NavTab.LIVE_EVENTS -> {
                             LiveEventsScreen(
                                 matches = matches,
+                                crexState = crexState,
                                 selectedSport = selectedSport,
                                 onSportSelect = { selectedSport = it },
                                 selectedStatus = selectedStatus,
                                 onStatusSelect = { selectedStatus = it },
+                                onManualRefresh = {
+                                    coroutineScope.launch {
+                                        when (selectedStatus) {
+                                            MatchStatus.LIVE -> {
+                                                val s = repository.refreshLiveMatches(force = true)
+                                                snackbarHostState.showSnackbar(
+                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Live CREX matches"
+                                                )
+                                            }
+                                            MatchStatus.UPCOMING -> {
+                                                val s = repository.refreshUpcomingMatches(force = true)
+                                                snackbarHostState.showSnackbar(
+                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Upcoming CREX matches"
+                                                )
+                                            }
+                                            MatchStatus.FINISHED -> {
+                                                val s = repository.refreshFinishedMatches(force = true)
+                                                snackbarHostState.showSnackbar(
+                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Finished CREX matches"
+                                                )
+                                            }
+                                            null -> {
+                                                val res = repository.syncFromRemoteFeed()
+                                                res.fold(
+                                                    onSuccess = { count ->
+                                                        snackbarHostState.showSnackbar("Refreshed $count CREX matches")
+                                                    },
+                                                    onFailure = { err ->
+                                                        snackbarHostState.showSnackbar("CREX Error: ${err.localizedMessage}")
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
                                 onMatchClick = { match ->
-                                    streamPickerMatch = match
-                                    showStreamPickerModal = true
+                                    openMatchModal(match)
                                 },
                                 onFavoriteToggle = { repository.toggleMatchFavorite(it) },
                                 onStreamSelectClick = { match ->
-                                    streamPickerMatch = match
-                                    showStreamPickerModal = true
+                                    openMatchModal(match)
                                 },
                                 searchQuery = searchQuery
                             )
@@ -403,6 +480,8 @@ fun FootballLiveTvApp(
                         NavTab.SPORTS -> {
                             SportsChannelsScreen(
                                 channels = channels,
+                                selectedCategory = selectedChannelCategory,
+                                onCategorySelect = { selectedChannelCategory = it },
                                 onChannelClick = { channel ->
                                     if (channel.streams.size > 1) {
                                         streamPickerChannel = channel
@@ -420,9 +499,26 @@ fun FootballLiveTvApp(
                         NavTab.CATEGORIES -> {
                             CategoriesScreen(
                                 categories = categories,
+                                searchQuery = searchQuery,
                                 onCategoryClick = { cat ->
-                                    searchQuery = cat.name
-                                    selectedTab = NavTab.SPORTS
+                                    val nameUpper = cat.name.uppercase()
+                                    when {
+                                        nameUpper.contains("LIVE EVENT") -> {
+                                            selectedStatus = MatchStatus.LIVE
+                                            selectedTab = NavTab.LIVE_EVENTS
+                                        }
+                                        nameUpper.contains("HIGHLIGHT") -> {
+                                            showHighlightsDialog = true
+                                        }
+                                        else -> {
+                                            val matchedChannelCat = channels
+                                                .map { it.category }
+                                                .firstOrNull { it.equals(cat.name, ignoreCase = true) }
+                                                ?: "All"
+                                            selectedChannelCategory = matchedChannelCat
+                                            selectedTab = NavTab.SPORTS
+                                        }
+                                    }
                                 }
                             )
                         }
@@ -431,10 +527,9 @@ fun FootballLiveTvApp(
                             FavouritesScreen(
                                 favoriteMatches = matches.filter { it.isFavorite },
                                 favoriteChannels = channels.filter { it.isFavorite },
+                                searchQuery = searchQuery,
                                 onMatchClick = { match ->
-                                    streamPickerMatch = match
-                                    streamPickerChannel = null
-                                    showStreamPickerModal = true
+                                    openMatchModal(match)
                                 },
                                 onChannelClick = { channel ->
                                     if (channel.streams.size > 1) {
@@ -448,8 +543,7 @@ fun FootballLiveTvApp(
                                 onMatchFavoriteToggle = { repository.toggleMatchFavorite(it) },
                                 onChannelFavoriteToggle = { repository.toggleChannelFavorite(it) },
                                 onStreamSelectClick = { match ->
-                                    streamPickerMatch = match
-                                    showStreamPickerModal = true
+                                    openMatchModal(match)
                                 }
                             )
                         }
@@ -468,9 +562,23 @@ fun FootballLiveTvApp(
                                     scoresSportTitle = "Football"
                                     showScoresDialog = true
                                 },
-                                onFloatingPlayerClick = { onEnterPiP() },
-                                onForceLowQualityToggle = {
-                                    repository.updateConfig(config.copy(forceLowQuality = it))
+                                onFloatingPlayerClick = {
+                                    if (currentStream == null && matches.isNotEmpty()) {
+                                        val firstLive = matches.firstOrNull { it.status == MatchStatus.LIVE } ?: matches.first()
+                                        startPlaying(firstLive, null, firstLive.streams)
+                                    }
+                                    onEnterPiP()
+                                },
+                                onForceLowQualityToggle = { lowQuality ->
+                                    repository.updateConfig(config.copy(forceLowQuality = lowQuality))
+                                    currentStream?.let { active ->
+                                        playerManager.playStream(active, lowQuality)
+                                    }
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            if (lowQuality) "Data Saver enabled (SD 480p max)" else "HD/FHD quality unlocked"
+                                        )
+                                    }
                                 },
                                 onAdminPanelClick = {
                                     showAdminPinDialog = true
@@ -483,19 +591,29 @@ fun FootballLiveTvApp(
         }
     }
 
-    // Modal: Stream selection from list (Match or Multi-Server Channel)
+    // Modal: Stream selection & on-demand CREX getSV3 match details
     if (showStreamPickerModal && (streamPickerMatch != null || streamPickerChannel != null)) {
         val currentMatch = streamPickerMatch
         val currentChannel = streamPickerChannel
         if (currentMatch != null) {
+            val latestMatch = matches.find { it.id == currentMatch.id } ?: currentMatch
+            val detailState = crexState.activeDetailState.takeIf {
+                it.matchId == latestMatch.id.removePrefix("crex-")
+            }
             MultipleStreamsModalDialog(
-                streams = currentMatch.streams,
-                currentSelectedStream = currentMatch.streams.firstOrNull(),
-                matchTitle = "${currentMatch.team1Name} vs ${currentMatch.team2Name}",
-                matchTournament = currentMatch.tournament,
-                matchStatus = currentMatch.status.name,
+                streams = latestMatch.streams,
+                currentSelectedStream = latestMatch.streams.firstOrNull(),
+                matchTitle = "${latestMatch.team1Name} vs ${latestMatch.team2Name}",
+                matchTournament = latestMatch.tournament,
+                matchStatus = latestMatch.status.name,
+                matchDetailState = detailState,
+                onRefreshDetail = {
+                    coroutineScope.launch {
+                        repository.loadMatchDetailOnDemand(latestMatch.id, force = true)
+                    }
+                },
                 onStreamSelected = { selected ->
-                    startPlaying(currentMatch, null, listOf(selected) + currentMatch.streams.filter { it.id != selected.id })
+                    startPlaying(latestMatch, null, listOf(selected) + latestMatch.streams.filter { it.id != selected.id })
                 },
                 onDismiss = {
                     showStreamPickerModal = false
@@ -578,9 +696,7 @@ fun FootballLiveTvApp(
             sportTitle = scoresSportTitle,
             matches = matches,
             onWatchMatch = { match ->
-                streamPickerMatch = match
-                streamPickerChannel = null
-                showStreamPickerModal = true
+                openMatchModal(match)
             },
             onDismiss = { showScoresDialog = false }
         )
