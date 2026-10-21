@@ -60,6 +60,7 @@ fun AdminPanelScreen(
     // Dialog states
     var showAddChannelDialog by remember { mutableStateOf(false) }
     var showAddMatchDialog by remember { mutableStateOf(false) }
+    var matchBeingEdited by remember { mutableStateOf<LiveMatch?>(null) }
 
     Scaffold(
         topBar = {
@@ -158,7 +159,14 @@ fun AdminPanelScreen(
                 AdminTab.MATCHES -> {
                     MatchesManagerTab(
                         matches = matches,
-                        onAddMatchClick = { showAddMatchDialog = true },
+                        onAddMatchClick = {
+                            matchBeingEdited = null
+                            showAddMatchDialog = true
+                        },
+                        onEditMatchClick = { match ->
+                            matchBeingEdited = match
+                            showAddMatchDialog = true
+                        },
                         onDeleteMatch = { repository.deleteMatch(it) },
                         onToggleStatus = { match ->
                             val nextStatus = when (match.status) {
@@ -201,13 +209,18 @@ fun AdminPanelScreen(
         )
     }
 
-    // Add Match Dialog with Multiple Streams Available
+    // Add or Edit Match Dialog with Multiple Streams Available
     if (showAddMatchDialog) {
         AddMatchModalDialog(
-            onDismiss = { showAddMatchDialog = false },
-            onSaveMatch = { newMatch ->
-                repository.addOrUpdateMatch(newMatch)
+            matchToEdit = matchBeingEdited,
+            onDismiss = {
                 showAddMatchDialog = false
+                matchBeingEdited = null
+            },
+            onSaveMatch = { savedMatch ->
+                repository.addOrUpdateMatch(savedMatch)
+                showAddMatchDialog = false
+                matchBeingEdited = null
             },
             onCheckUrl = { url, callback ->
                 coroutineScope.launch {
@@ -598,6 +611,7 @@ fun ChannelsManagerTab(
 fun MatchesManagerTab(
     matches: List<LiveMatch>,
     onAddMatchClick: () -> Unit,
+    onEditMatchClick: (LiveMatch) -> Unit,
     onDeleteMatch: (String) -> Unit,
     onToggleStatus: (LiveMatch) -> Unit,
     onTestPlayStream: (StreamSource) -> Unit
@@ -697,7 +711,7 @@ fun MatchesManagerTab(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Score / Time: ${m.timeOrScore} • ${m.streams.size} Streams attached",
+                        text = "Score / Time: ${m.timeOrScore} • ${m.streams.size} Multiple Streams configured",
                         style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
                     )
 
@@ -723,6 +737,28 @@ fun MatchesManagerTab(
                                 }
                             }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Edit streams and match action button
+                    OutlinedButton(
+                        onClick = { onEditMatchClick(m) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(CyanAccent)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Edit Streams & Channels (${m.streams.size} Available)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
@@ -1660,33 +1696,38 @@ fun AddChannelModalDialog(
     }
 }
 
-// MODAL DIALOG: ADD LIVE MATCH WITH MULTIPLE STREAMS AVAILABLE
+// MODAL DIALOG: ADD OR EDIT LIVE MATCH WITH MULTIPLE STREAMS AVAILABLE
 @Composable
 fun AddMatchModalDialog(
+    matchToEdit: LiveMatch? = null,
     onDismiss: () -> Unit,
     onSaveMatch: (LiveMatch) -> Unit,
     onCheckUrl: (String, (M3U8CheckResult) -> Unit) -> Unit
 ) {
-    var tournament by remember { mutableStateOf("CRICKET | ODI TRI-SERIES IN PAKISTAN") }
-    var sport by remember { mutableStateOf(SportType.CRICKET) }
-    var team1Name by remember { mutableStateOf("Pakistan") }
-    var team1Code by remember { mutableStateOf("PAK") }
-    var team1Flag by remember { mutableStateOf("🇵🇰") }
+    var tournament by remember(matchToEdit) { mutableStateOf(matchToEdit?.tournament ?: "CRICKET | ODI TRI-SERIES IN PAKISTAN") }
+    var sport by remember(matchToEdit) { mutableStateOf(matchToEdit?.sport ?: SportType.CRICKET) }
+    var team1Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Name ?: "Pakistan") }
+    var team1Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Code ?: "PAK") }
+    var team1Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1FlagUrl ?: "🇵🇰") }
 
-    var team2Name by remember { mutableStateOf("England") }
-    var team2Code by remember { mutableStateOf("ENG") }
-    var team2Flag by remember { mutableStateOf("🏴󠁧󠁢󠁥󠁮󠁧󠁿") }
+    var team2Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Name ?: "England") }
+    var team2Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Code ?: "ENG") }
+    var team2Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2FlagUrl ?: "🏴󠁧󠁢󠁥󠁮󠁧󠁿") }
 
-    var timeOrScore by remember { mutableStateOf("06:25:22") }
-    var status by remember { mutableStateOf(MatchStatus.LIVE) }
+    var timeOrScore by remember(matchToEdit) { mutableStateOf(matchToEdit?.timeOrScore ?: "06:25:22") }
+    var status by remember(matchToEdit) { mutableStateOf(matchToEdit?.status ?: MatchStatus.LIVE) }
 
-    var streamsList by remember {
+    var streamsList by remember(matchToEdit) {
         mutableStateOf(
-            listOf(
-                StreamSource(name = "WILLOW FHD", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
-                StreamSource(name = "SKY CRICKET FHD", quality = "FHD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
-                StreamSource(name = "TAPMAD FHD", quality = "FHD", url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8")
-            )
+            if (matchToEdit != null && matchToEdit.streams.isNotEmpty()) {
+                matchToEdit.streams
+            } else {
+                listOf(
+                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
+                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
+                    StreamSource(name = "TAPMAD FHD", quality = "FHD", url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8")
+                )
+            }
         )
     }
 
@@ -1707,12 +1748,16 @@ fun AddMatchModalDialog(
             ) {
                 item {
                     Text(
-                        text = "Add Match & Multiple Streams",
+                        text = if (matchToEdit != null) "Edit Match & Multiple Streams" else "Add Live Match With Multi-Streams",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
                             fontSize = 17.sp
                         )
+                    )
+                    Text(
+                        text = "Configure match details and all available stream servers/channels for viewers",
+                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
                     )
                 }
 

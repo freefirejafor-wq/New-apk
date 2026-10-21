@@ -482,6 +482,9 @@ fun PulsingLiveBadge() {
 fun MultipleStreamsModalDialog(
     streams: List<StreamSource>,
     currentSelectedStream: StreamSource? = null,
+    matchTitle: String? = null,
+    matchTournament: String? = null,
+    matchStatus: String? = null,
     onStreamSelected: (StreamSource) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -517,30 +520,76 @@ fun MultipleStreamsModalDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (matchTournament != null) {
+                    Text(
+                        text = matchTournament,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = TextSecondary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                if (matchTitle != null) {
+                    Text(
+                        text = matchTitle,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            fontSize = 17.sp
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                // Multiple Streams Available Header
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = NavySurfaceVariant.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (matchStatus == "LIVE") LiveRed else CyanAccent)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "MULTIPLE STREAMS AVAILABLE",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = GoldYellow,
+                                fontSize = 11.sp,
+                                letterSpacing = 0.5.sp
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
-                    text = "Multiple Streams Available",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        fontSize = 18.sp
-                    ),
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "Choose your preferred stream",
+                    text = "Select a channel or streaming server to watch:",
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = TextSecondary,
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     ),
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // List of streams
                 Column(

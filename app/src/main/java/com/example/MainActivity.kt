@@ -295,7 +295,8 @@ fun FootballLiveTvApp(
                                 selectedStatus = selectedStatus,
                                 onStatusSelect = { selectedStatus = it },
                                 onMatchClick = { match ->
-                                    startPlaying(match, null, match.streams)
+                                    streamPickerMatch = match
+                                    showStreamPickerModal = true
                                 },
                                 onFavoriteToggle = { repository.toggleMatchFavorite(it) },
                                 onStreamSelectClick = { match ->
@@ -332,7 +333,8 @@ fun FootballLiveTvApp(
                                 favoriteMatches = matches.filter { it.isFavorite },
                                 favoriteChannels = channels.filter { it.isFavorite },
                                 onMatchClick = { match ->
-                                    startPlaying(match, null, match.streams)
+                                    streamPickerMatch = match
+                                    showStreamPickerModal = true
                                 },
                                 onChannelClick = { channel ->
                                     startPlaying(null, channel.name, channel.streams)
@@ -381,6 +383,9 @@ fun FootballLiveTvApp(
         MultipleStreamsModalDialog(
             streams = currentMatch.streams,
             currentSelectedStream = currentMatch.streams.firstOrNull(),
+            matchTitle = "${currentMatch.team1Name} vs ${currentMatch.team2Name}",
+            matchTournament = currentMatch.tournament,
+            matchStatus = currentMatch.status.name,
             onStreamSelected = { selected ->
                 startPlaying(currentMatch, null, listOf(selected) + currentMatch.streams.filter { it.id != selected.id })
             },
