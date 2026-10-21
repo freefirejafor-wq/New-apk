@@ -618,6 +618,7 @@ class CrexCricketService(
         return matches
             .sortedBy { it.first }
             .map { it.second }
+            .distinctBy { it.id }
     }
 
     private fun parseSingleLiveMatchObject(matchKey: String, obj: JSONObject): Pair<Int, LiveMatch>? {
@@ -736,7 +737,7 @@ class CrexCricketService(
                 parseSingleUpcomingMatchObject(groupOrMatch, groupDate)?.let { result.add(it) }
             }
         }
-        return result
+        return result.distinctBy { it.id }
     }
 
     private fun parseSingleUpcomingMatchObject(obj: JSONObject, groupDate: String): LiveMatch? {
@@ -837,7 +838,7 @@ class CrexCricketService(
                 parseSingleFinishedMatchObject(obj)?.let { result.add(it) }
             }
         }
-        return result
+        return result.distinctBy { it.id }
     }
 
     private fun learnWinnerNameFromFinishedObject(obj: JSONObject) {

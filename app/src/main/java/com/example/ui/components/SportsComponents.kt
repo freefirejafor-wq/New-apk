@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,12 +16,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.ContentScale
@@ -28,9 +38,12 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
+import com.example.data.model.SportType
 import com.example.data.model.SportsChannel
 import com.example.data.model.StreamSource
 import com.example.ui.theme.*
+import kotlin.math.cos
+import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -213,6 +226,218 @@ fun BottomSportsNavBar(
 }
 
 @Composable
+fun PremiumCricketEmblem(
+    size: Dp = 36.dp,
+    isSelected: Boolean = true
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    colors = if (isSelected) {
+                        listOf(Color(0xFF10B981).copy(alpha = 0.42f), Color(0xFF047857).copy(alpha = 0.25f))
+                    } else {
+                        listOf(Color(0xFF0EA5E9).copy(alpha = 0.28f), Color(0xFF1E293B).copy(alpha = 0.6f))
+                    }
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF34D399), Color(0xFF38BDF8))
+                ),
+                shape = CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(size * 0.16f)) {
+            val w = this.size.width
+            val h = this.size.height
+
+            // Crossed golden stumps subtle glow in background
+            val stumpColor = Color(0xFFFDE68A).copy(alpha = 0.45f)
+            val stumpStroke = w * 0.055f
+            drawLine(
+                color = stumpColor,
+                start = Offset(w * 0.24f, h * 0.22f),
+                end = Offset(w * 0.24f, h * 0.78f),
+                strokeWidth = stumpStroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = stumpColor,
+                start = Offset(w * 0.36f, h * 0.20f),
+                end = Offset(w * 0.36f, h * 0.78f),
+                strokeWidth = stumpStroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = stumpColor,
+                start = Offset(w * 0.20f, h * 0.20f),
+                end = Offset(w * 0.40f, h * 0.20f),
+                strokeWidth = stumpStroke,
+                cap = StrokeCap.Round
+            )
+
+            // Diagonal Golden Willow Cricket Bat
+            rotate(degrees = -35f, pivot = Offset(w * 0.5f, h * 0.5f)) {
+                // Bat Handle (white/aqua grip)
+                drawRoundRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFFF8FAFC), Color(0xFF93C5FD))
+                    ),
+                    topLeft = Offset(w * 0.455f, h * 0.06f),
+                    size = Size(w * 0.09f, h * 0.28f),
+                    cornerRadius = CornerRadius(w * 0.04f, w * 0.04f)
+                )
+                // Bat Blade (Golden Amber Willow)
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFFDE047), Color(0xFFF59E0B), Color(0xFFD97706))
+                    ),
+                    topLeft = Offset(w * 0.39f, h * 0.31f),
+                    size = Size(w * 0.22f, h * 0.58f),
+                    cornerRadius = CornerRadius(w * 0.05f, w * 0.05f)
+                )
+                // Bat ridge highlight
+                drawLine(
+                    color = Color.White.copy(alpha = 0.65f),
+                    start = Offset(w * 0.50f, h * 0.35f),
+                    end = Offset(w * 0.50f, h * 0.83f),
+                    strokeWidth = w * 0.03f,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            // Crimson Leather Cricket Ball with white stitched seam
+            val ballCenter = Offset(w * 0.67f, h * 0.66f)
+            val ballRadius = w * 0.23f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFFF6B6B), Color(0xFFEF4444), Color(0xFF991B1B)),
+                    center = Offset(ballCenter.x - ballRadius * 0.25f, ballCenter.y - ballRadius * 0.25f),
+                    radius = ballRadius * 1.3f
+                ),
+                radius = ballRadius,
+                center = ballCenter
+            )
+            // Seam line across the cricket ball
+            drawLine(
+                color = Color.White.copy(alpha = 0.92f),
+                start = Offset(ballCenter.x - ballRadius * 0.65f, ballCenter.y - ballRadius * 0.55f),
+                end = Offset(ballCenter.x + ballRadius * 0.65f, ballCenter.y + ballRadius * 0.55f),
+                strokeWidth = w * 0.045f,
+                cap = StrokeCap.Round
+            )
+            // Specular highlight dot
+            drawCircle(
+                color = Color.White.copy(alpha = 0.75f),
+                radius = ballRadius * 0.20f,
+                center = Offset(ballCenter.x - ballRadius * 0.32f, ballCenter.y - ballRadius * 0.32f)
+            )
+        }
+    }
+}
+
+@Composable
+fun PremiumFootballEmblem(
+    size: Dp = 36.dp,
+    isSelected: Boolean = true
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    colors = if (isSelected) {
+                        listOf(Color(0xFF38BDF8).copy(alpha = 0.42f), Color(0xFF1D4ED8).copy(alpha = 0.28f))
+                    } else {
+                        listOf(Color(0xFF38BDF8).copy(alpha = 0.25f), Color(0xFF1E293B).copy(alpha = 0.6f))
+                    }
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF38BDF8), Color(0xFF818CF8))
+                ),
+                shape = CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(size * 0.16f)) {
+            val w = this.size.width
+            val h = this.size.height
+            val center = Offset(w * 0.5f, h * 0.5f)
+            val radius = w * 0.44f
+
+            // Outer 3D Pearl-White & Ice-Blue Football Sphere
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFFFFFFF), Color(0xFFE0F2FE), Color(0xFF93C5FD)),
+                    center = Offset(center.x - radius * 0.25f, center.y - radius * 0.25f),
+                    radius = radius * 1.35f
+                ),
+                radius = radius,
+                center = center
+            )
+
+            // Central Pentagon Panel
+            val pentagonRadius = radius * 0.42f
+            val pentagonPath = Path()
+            val vertices = mutableListOf<Offset>()
+            for (i in 0 until 5) {
+                val angleRad = Math.toRadians((-90.0 + i * 72.0))
+                val vx = center.x + (pentagonRadius * cos(angleRad)).toFloat()
+                val vy = center.y + (pentagonRadius * sin(angleRad)).toFloat()
+                vertices.add(Offset(vx, vy))
+                if (i == 0) pentagonPath.moveTo(vx, vy) else pentagonPath.lineTo(vx, vy)
+            }
+            pentagonPath.close()
+
+            drawPath(
+                path = pentagonPath,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF0F172A), Color(0xFF1E3A8A))
+                )
+            )
+
+            // Seam spokes from pentagon vertices to outer rim + rim accents
+            vertices.forEachIndexed { i, vertex ->
+                val angleRad = Math.toRadians((-90.0 + i * 72.0))
+                val outerPoint = Offset(
+                    center.x + (radius * 0.92f * cos(angleRad)).toFloat(),
+                    center.y + (radius * 0.92f * sin(angleRad)).toFloat()
+                )
+                drawLine(
+                    color = Color(0xFF1E3A8A),
+                    start = vertex,
+                    end = outerPoint,
+                    strokeWidth = w * 0.055f,
+                    cap = StrokeCap.Round
+                )
+                drawCircle(
+                    color = Color(0xFF0F172A),
+                    radius = radius * 0.13f,
+                    center = outerPoint
+                )
+            }
+
+            // Outer metallic ring
+            drawCircle(
+                color = Color(0xFF0284C7),
+                radius = radius,
+                center = center,
+                style = Stroke(width = w * 0.055f)
+            )
+        }
+    }
+}
+
+@Composable
 fun MatchCard(
     match: LiveMatch,
     onClick: () -> Unit,
@@ -224,16 +449,6 @@ fun MatchCard(
     }
     val team2Visual = remember(match.team2Name, match.team2Code, match.team2FlagUrl) {
         com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
-    }
-
-    val sportIcon = when (match.sport) {
-        com.example.data.model.SportType.CRICKET -> Icons.Default.SportsCricket
-        com.example.data.model.SportType.FOOTBALL -> Icons.Default.SportsSoccer
-        com.example.data.model.SportType.BOXING -> Icons.Default.SportsMma
-        com.example.data.model.SportType.BASKETBALL -> Icons.Default.SportsBasketball
-        com.example.data.model.SportType.HOCKEY -> Icons.Default.SportsHockey
-        com.example.data.model.SportType.TENNIS -> Icons.Default.SportsTennis
-        else -> Icons.Default.Sports
     }
 
     Card(
@@ -260,21 +475,12 @@ fun MatchCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(NavySurfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            sportIcon,
-                            contentDescription = null,
-                            tint = CyanAccent,
-                            modifier = Modifier.size(13.dp)
-                        )
+                    if (match.sport == SportType.CRICKET) {
+                        PremiumCricketEmblem(size = 22.dp, isSelected = true)
+                    } else {
+                        PremiumFootballEmblem(size = 22.dp, isSelected = true)
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = match.tournament,
                         style = MaterialTheme.typography.labelSmall.copy(

@@ -30,6 +30,13 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `mainActivity launches without crash`() {
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).create()
+        assertNotNull(controller.get())
+        controller.destroy()
+    }
+
+    @Test
     fun `repository loads default football matches and updates cricket from CREX`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)

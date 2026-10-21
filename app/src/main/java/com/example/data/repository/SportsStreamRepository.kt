@@ -35,6 +35,7 @@ class SportsStreamRepository(
         .build()
 
     private val favoriteMatchIds = mutableSetOf<String>()
+    private val footballMatches = mutableListOf<LiveMatch>()
 
     private val _crexDashboardState = MutableStateFlow(CrexDashboardState())
     val crexDashboardState: StateFlow<CrexDashboardState> = _crexDashboardState.asStateFlow()
@@ -57,8 +58,6 @@ class SportsStreamRepository(
     init {
         loadData()
     }
-
-    private val footballMatches = mutableListOf<LiveMatch>()
 
     private fun loadData() {
         val savedFavs = prefs.getStringSet("favorite_match_ids", emptySet()).orEmpty()
@@ -153,7 +152,7 @@ class SportsStreamRepository(
             addAll(fbWithFavs.filter { it.status == MatchStatus.UPCOMING })
             addAll(applyFavorites(state.finishedState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.FINISHED })
-        }
+        }.distinctBy { "${it.status}_${it.id}" }
         _matches.value = combined
     }
 
