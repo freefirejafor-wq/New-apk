@@ -23,7 +23,15 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Prepare environment and keystore
+      - name: Accept Android SDK Licenses
+        run: |
+          if [ -d "${ANDROID_HOME}/cmdline-tools/latest/bin" ]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager --licenses > /dev/null || true
+          fi
+
+      - name: Prepare environment, icons, and keystore
         run: |
           touch .env
           if [ -f debug.keystore.base64 ]; then
@@ -31,15 +39,46 @@ jobs:
           else
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
+          # Remove any stale duplicate XML vector icons so PNG icons never collide in mergeDebugResources
+          rm -f app/src/main/res/drawable/ic_app_logo.xml
+          rm -f app/src/main/res/drawable/ic_launcher_foreground.xml
+          # Ensure PNG app logo and adaptive launcher icons exist from the uploaded Sports Live image
+          LOGO_SRC="public/assets/aistudio/Gemini_Generated_Image_vj98thvj98thvj98_edit_5767021166244946_7412cfe0.jpg"
+          if [ ! -f "$LOGO_SRC" ] && [ -f "app/sports_live_icon.b64" ]; then
+            base64 -d app/sports_live_icon.b64 > /tmp/sports_live_logo.jpg
+            LOGO_SRC="/tmp/sports_live_logo.jpg"
+          fi
+          if [ -f "$LOGO_SRC" ]; then
+            mkdir -p app/src/main/res/drawable app/src/main/res/mipmap-mdpi app/src/main/res/mipmap-hdpi app/src/main/res/mipmap-xhdpi app/src/main/res/mipmap-xxhdpi app/src/main/res/mipmap-xxxhdpi
+            convert "$LOGO_SRC" -resize 512x512! PNG32:app/src/main/res/drawable/ic_app_logo.png
+            convert -size 432x432 xc:white \( "$LOGO_SRC" -resize 296x296! \) -gravity center -composite PNG32:app/src/main/res/drawable/ic_launcher_foreground.png
+            convert "$LOGO_SRC" -resize 48x48! PNG32:app/src/main/res/mipmap-mdpi/ic_launcher.png
+            convert "$LOGO_SRC" -resize 72x72! PNG32:app/src/main/res/mipmap-hdpi/ic_launcher.png
+            convert "$LOGO_SRC" -resize 96x96! PNG32:app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            convert "$LOGO_SRC" -resize 144x144! PNG32:app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            convert "$LOGO_SRC" -resize 192x192! PNG32:app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            convert "$LOGO_SRC" -resize 48x48! PNG32:app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+            convert "$LOGO_SRC" -resize 72x72! PNG32:app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+            convert "$LOGO_SRC" -resize 96x96! PNG32:app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+            convert "$LOGO_SRC" -resize 144x144! PNG32:app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+            convert "$LOGO_SRC" -resize 192x192! PNG32:app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          fi
           sed -i 's/\r$//' gradlew || true
           chmod +x gradlew
 
       - name: Build with Gradle
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: FootballLiveTV-Debug-APK
+          name: SportsLive-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload Web Admin Panel
+        uses: actions/upload-artifact@v4
+        with:
+          name: SportsLive-Web-Admin-Panel
+          path: web-admin/index.html
           retention-days: 30
