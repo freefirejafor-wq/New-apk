@@ -49,19 +49,45 @@ jobs:
             LOGO_SRC="/tmp/sports_live_logo.jpg"
           fi
           if [ -f "$LOGO_SRC" ]; then
-            mkdir -p app/src/main/res/drawable app/src/main/res/mipmap-mdpi app/src/main/res/mipmap-hdpi app/src/main/res/mipmap-xhdpi app/src/main/res/mipmap-xxhdpi app/src/main/res/mipmap-xxxhdpi
-            convert "$LOGO_SRC" -resize 512x512! PNG32:app/src/main/res/drawable/ic_app_logo.png
-            convert -size 432x432 xc:white \( "$LOGO_SRC" -resize 296x296! \) -gravity center -composite PNG32:app/src/main/res/drawable/ic_launcher_foreground.png
-            convert "$LOGO_SRC" -resize 48x48! PNG32:app/src/main/res/mipmap-mdpi/ic_launcher.png
-            convert "$LOGO_SRC" -resize 72x72! PNG32:app/src/main/res/mipmap-hdpi/ic_launcher.png
-            convert "$LOGO_SRC" -resize 96x96! PNG32:app/src/main/res/mipmap-xhdpi/ic_launcher.png
-            convert "$LOGO_SRC" -resize 144x144! PNG32:app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-            convert "$LOGO_SRC" -resize 192x192! PNG32:app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-            convert "$LOGO_SRC" -resize 48x48! PNG32:app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-            convert "$LOGO_SRC" -resize 72x72! PNG32:app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-            convert "$LOGO_SRC" -resize 96x96! PNG32:app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-            convert "$LOGO_SRC" -resize 144x144! PNG32:app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-            convert "$LOGO_SRC" -resize 192x192! PNG32:app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+            cat << 'EOF' > /tmp/GenIcons.java
+            import java.awt.*;
+            import java.awt.image.BufferedImage;
+            import java.io.File;
+            import javax.imageio.ImageIO;
+
+            public class GenIcons {
+                public static void main(String[] args) throws Exception {
+                    BufferedImage src = ImageIO.read(new File(args[0]));
+                    writeResized(src, 512, 512, 0, "app/src/main/res/drawable/ic_app_logo.png");
+                    writeResized(src, 432, 432, 68, "app/src/main/res/drawable/ic_launcher_foreground.png");
+                    int[] sizes = {48, 72, 96, 144, 192};
+                    String[] dirs = {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"};
+                    for (int i = 0; i < sizes.length; i++) {
+                        String dir = "app/src/main/res/mipmap-" + dirs[i];
+                        new File(dir).mkdirs();
+                        writeResized(src, sizes[i], sizes[i], 0, dir + "/ic_launcher.png");
+                        writeResized(src, sizes[i], sizes[i], 0, dir + "/ic_launcher_round.png");
+                    }
+                }
+
+                static void writeResized(BufferedImage src, int w, int h, int pad, String outPath) throws Exception {
+                    File outFile = new File(outPath);
+                    outFile.getParentFile().mkdirs();
+                    BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D g = dst.createGraphics();
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g.setColor(Color.WHITE);
+                    g.fillRect(0, 0, w, h);
+                    g.drawImage(src, pad, pad, w - 2 * pad, h - 2 * pad, null);
+                    g.dispose();
+                    ImageIO.write(dst, "PNG", outFile);
+                }
+            }
+            EOF
+            java -Djava.awt.headless=true /tmp/GenIcons.java "$LOGO_SRC"
+            rm -f /tmp/GenIcons.java
           fi
           sed -i 's/\r$//' gradlew || true
           chmod +x gradlew
