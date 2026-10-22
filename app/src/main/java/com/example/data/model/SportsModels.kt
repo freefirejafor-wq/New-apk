@@ -30,9 +30,9 @@ data class HighlightItem(
 )
 
 data class AppConfig(
-    val appTitle: String = "SportzX Live TV",
-    val version: String = "8.0",
-    val announcement: String = "Welcome to SportzX Live TV! Multiple high-definition stream servers are active for today's matches.",
+    val appTitle: String = "Sports Live",
+    val version: String = "9.0",
+    val announcement: String = "Welcome to Sports Live! Ultra HD multi-server live sports streams are active.",
     val telegramLink: String = "https://t.me/sports_live_streams",
     val adminPin: String = "1234",
     val forceLowQuality: Boolean = false,

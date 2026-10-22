@@ -1,6 +1,6 @@
 {
-  "name": "SportzX Live TV",
-  "description": "Live sports streaming app with Media3 ExoPlayer, multi-stream support, M3U8 stream validator, and admin panel.",
+  "name": "Sports Live",
+  "description": "Live cricket, football, boxing, and motorsport streaming app with multi-server HD streams and cloud control.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

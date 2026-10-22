@@ -64,8 +64,10 @@ object TeamFlagResolver {
         // Oceania National Teams
         "australia" to TeamVisual("AUS", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia"),
         "aus" to TeamVisual("AUS", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia"),
+        "aus-w" to TeamVisual("AUS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia Women"),
         "new zealand" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
         "nz" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
+        "nz-w" to TeamVisual("NZ-W", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand Women"),
         "nzl" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
 
         // European National Teams
@@ -157,9 +159,9 @@ object TeamFlagResolver {
         "jamaica" to TeamVisual("JAM", "https://flagcdn.com/w160/jm.png", "🇯🇲", "Jamaica"),
 
         // African National Teams
-        "south africa" to TeamVisual("RSA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
-        "sa" to TeamVisual("RSA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
-        "rsa" to TeamVisual("RSA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
+        "south africa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
+        "sa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
+        "rsa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
         "zimbabwe" to TeamVisual("ZIM", "https://flagcdn.com/w160/zw.png", "🇿🇼", "Zimbabwe"),
         "zim" to TeamVisual("ZIM", "https://flagcdn.com/w160/zw.png", "🇿🇼", "Zimbabwe"),
         "namibia" to TeamVisual("NAM", "https://flagcdn.com/w160/na.png", "🇳🇦", "Namibia"),
@@ -212,23 +214,23 @@ object TeamFlagResolver {
         val cleanName = teamName.trim().lowercase()
         val cleanCode = teamCode.trim().lowercase()
 
-        // Direct lookup by name or code
-        val matched = nationalTeamMap[cleanName]
-            ?: nationalTeamMap[cleanCode]
+        // Direct lookup by code first, then name
+        val matched = nationalTeamMap[cleanCode]
+            ?: nationalTeamMap[cleanName]
             ?: nationalTeamMap.entries.firstOrNull { (k, _) ->
                 k.length >= 4 && cleanName.contains(k)
             }?.value
 
         val resolvedCode = when {
+            teamCode.isNotBlank() -> teamCode.trim()
             matched != null -> matched.code
-            teamCode.isNotBlank() -> teamCode.trim().uppercase()
-            else -> teamName.trim().take(3).uppercase().ifBlank { "INT" }
+            else -> teamName.trim().ifBlank { "INT" }
         }
 
         val resolvedFlagUrl = when {
-            matched != null -> matched.flagUrl
             existingFlag.trim().startsWith("http://", ignoreCase = true) ||
                 existingFlag.trim().startsWith("https://", ignoreCase = true) -> existingFlag.trim()
+            matched != null -> matched.flagUrl
             else -> ""
         }
 

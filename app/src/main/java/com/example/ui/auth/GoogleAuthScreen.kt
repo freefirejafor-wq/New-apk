@@ -189,7 +189,7 @@ fun signOut(
 
 @Composable
 fun AuthGateScreen(
-    appTitle: String = "SportzX Live TV",
+    appTitle: String = "Sports Live",
     onAuthSuccess: () -> Unit
 ) {
     val context = LocalContext.current
@@ -241,16 +241,18 @@ fun AuthGateScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(84.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Color(0xFF070B19))
-                        .border(1.5.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(20.dp)),
+                        .size(92.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(Color.White)
+                        .border(1.5.dp, Color(0xFFFF5722), RoundedCornerShape(22.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_app_logo),
                         contentDescription = appTitle,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
                     )
                 }
 

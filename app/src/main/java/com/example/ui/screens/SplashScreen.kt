@@ -70,21 +70,29 @@ fun SplashScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(24.dp)
         ) {
-            // App Logo Box with subtle elevation & border
+            // App Logo Box displaying the exact uploaded Sports Live icon
             Box(
                 modifier = Modifier
                     .scale(scale)
-                    .size(116.dp)
-                    .clip(RoundedCornerShape(26.dp))
-                    .background(Color(0xFF070B19))
-                    .border(2.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(26.dp))
+                    .size(132.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color.White)
+                    .border(
+                        width = 2.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(Color(0xFFFF5722), Color(0xFFE53935), CyanAccent)
+                        ),
+                        shape = RoundedCornerShape(28.dp)
+                    )
                     .testTag("splash_app_logo"),
                 contentAlignment = Alignment.Center
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.ic_app_logo),
-                    contentDescription = "SportzX Live TV Logo",
-                    modifier = Modifier.fillMaxSize()
+                    contentDescription = "Sports Live Logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(6.dp)
                 )
             }
 
@@ -97,7 +105,7 @@ fun SplashScreen(
                     fontWeight = FontWeight.ExtraBold,
                     color = TextPrimary,
                     fontSize = 28.sp,
-                    letterSpacing = 0.5.sp
+                    letterSpacing = 0.8.sp
                 ),
                 textAlign = TextAlign.Center
             )
@@ -106,11 +114,12 @@ fun SplashScreen(
 
             // Subtitle
             Text(
-                text = "Live HD Sports & Cricket Streaming",
+                text = "ULTRA HD LIVE SPORTS & BROADCAST",
                 style = MaterialTheme.typography.bodyMedium.copy(
                     color = GoldYellow,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    letterSpacing = 1.4.sp
                 ),
                 textAlign = TextAlign.Center
             )

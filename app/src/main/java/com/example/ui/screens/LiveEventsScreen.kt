@@ -1,22 +1,31 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -28,9 +37,9 @@ import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
 import com.example.data.model.SportType
 import com.example.ui.components.MatchCard
-import com.example.ui.components.PremiumCricketEmblem
-import com.example.ui.components.PremiumFootballEmblem
 import com.example.ui.theme.*
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun LiveEventsScreen(
@@ -46,27 +55,18 @@ fun LiveEventsScreen(
     onStreamSelectClick: (LiveMatch) -> Unit,
     searchQuery: String = ""
 ) {
-    // Only Cricket and Football are shown in the sport line
-    val supportedMatches = remember(matches) {
-        matches.filter { it.sport == SportType.CRICKET || it.sport == SportType.FOOTBALL }
-    }
+    val totalCount = matches.size
+    val cricketCount = remember(matches) { matches.count { it.sport == SportType.CRICKET } }
+    val footballCount = remember(matches) { matches.count { it.sport == SportType.FOOTBALL } }
+    val boxingCount = remember(matches) { matches.count { it.sport == SportType.BOXING } }
+    val racingCount = remember(matches) { matches.count { it.sport == SportType.RACING } }
 
-    val cricketCount = remember(supportedMatches) {
-        supportedMatches.count { it.sport == SportType.CRICKET }
-    }
-    val footballCount = remember(supportedMatches) {
-        supportedMatches.count { it.sport == SportType.FOOTBALL }
-    }
-
-    // Filter matches strictly by Sport (Cricket / Football / All), Status, and Search Query
-    val filteredMatches = remember(supportedMatches, selectedSport, selectedStatus, searchQuery) {
-        supportedMatches.filter { match ->
+    val sportFilteredMatches = remember(matches, selectedSport, searchQuery) {
+        matches.filter { match ->
             val sportMatches = when (selectedSport) {
-                SportType.CRICKET -> match.sport == SportType.CRICKET
-                SportType.FOOTBALL -> match.sport == SportType.FOOTBALL
-                else -> true
+                SportType.ALL -> true
+                else -> match.sport == selectedSport
             }
-            val statusMatches = selectedStatus == null || match.status == selectedStatus
             val queryMatches = if (searchQuery.isBlank()) true else {
                 match.team1Name.contains(searchQuery, ignoreCase = true) ||
                     match.team2Name.contains(searchQuery, ignoreCase = true) ||
@@ -74,7 +74,26 @@ fun LiveEventsScreen(
                     match.team2Code.contains(searchQuery, ignoreCase = true) ||
                     match.tournament.contains(searchQuery, ignoreCase = true)
             }
-            sportMatches && statusMatches && queryMatches
+            sportMatches && queryMatches
+        }
+    }
+
+    val allStatusCount = sportFilteredMatches.size
+    val liveStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.LIVE }
+    }
+    val upcomingStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.UPCOMING }
+    }
+    val finishedStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.FINISHED }
+    }
+
+    val filteredMatches = remember(sportFilteredMatches, selectedStatus) {
+        if (selectedStatus == null) {
+            sportFilteredMatches
+        } else {
+            sportFilteredMatches.filter { it.status == selectedStatus }
         }
     }
 
@@ -85,159 +104,116 @@ fun LiveEventsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0F192D),
-                        NavyDark,
-                        Color(0xFF0D1628)
-                    )
-                )
-            )
+            .background(Color(0xFF0B111E))
+            .statusBarsPadding()
     ) {
-        // Top Sport Row: ONLY Cricket and Football — 2 balanced premium gradient cards side-by-side
+        // 1. Top Sport Selector Row (All, Cricket, Football, Boxing, Motorsport) matching screenshot
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val isCricketActive = selectedSport == SportType.CRICKET || selectedSport == SportType.ALL
-            val isFootballActive = selectedSport == SportType.FOOTBALL || selectedSport == SportType.ALL
+            SportIconTopCard(
+                sportType = SportType.ALL,
+                badgeCount = totalCount,
+                isSelected = selectedSport == SportType.ALL,
+                showTextLabel = true,
+                label = "All",
+                onClick = { onSportSelect(SportType.ALL) }
+            )
 
-            PremiumSportSelectorCard(
-                modifier = Modifier.weight(1f),
-                label = "Cricket",
-                subtitle = if (cricketCount > 0) "$cricketCount Matches" else "INTL • LIVE",
+            SportIconTopCard(
                 sportType = SportType.CRICKET,
+                badgeCount = cricketCount,
                 isSelected = selectedSport == SportType.CRICKET,
-                isIlluminated = isCricketActive,
-                gradientColors = if (selectedSport == SportType.CRICKET) {
-                    listOf(Color(0xFF059669), Color(0xFF0284C7))
-                } else if (selectedSport == SportType.ALL) {
-                    listOf(Color(0xFF0D4A4D), Color(0xFF0F3460))
-                } else {
-                    listOf(Color(0xFF132A3E), Color(0xFF112036))
-                },
-                borderColor = if (selectedSport == SportType.CRICKET) {
-                    Color(0xFF34D399)
-                } else if (selectedSport == SportType.ALL) {
-                    CyanAccent.copy(alpha = 0.65f)
-                } else {
-                    NavyBorder
-                },
+                showTextLabel = false,
+                label = "Cricket",
                 onClick = {
-                    if (selectedSport == SportType.CRICKET) {
-                        onSportSelect(SportType.ALL)
-                    } else {
-                        onSportSelect(SportType.CRICKET)
-                    }
+                    onSportSelect(if (selectedSport == SportType.CRICKET) SportType.ALL else SportType.CRICKET)
                 }
             )
 
-            PremiumSportSelectorCard(
-                modifier = Modifier.weight(1f),
-                label = "Football",
-                subtitle = if (footballCount > 0) "$footballCount Matches" else "INTL • HD",
+            SportIconTopCard(
                 sportType = SportType.FOOTBALL,
+                badgeCount = footballCount,
                 isSelected = selectedSport == SportType.FOOTBALL,
-                isIlluminated = isFootballActive,
-                gradientColors = if (selectedSport == SportType.FOOTBALL) {
-                    listOf(Color(0xFF2563EB), Color(0xFF06B6D4))
-                } else if (selectedSport == SportType.ALL) {
-                    listOf(Color(0xFF153462), Color(0xFF0F3460))
-                } else {
-                    listOf(Color(0xFF142642), Color(0xFF112036))
-                },
-                borderColor = if (selectedSport == SportType.FOOTBALL) {
-                    Color(0xFF38BDF8)
-                } else if (selectedSport == SportType.ALL) {
-                    CyanAccent.copy(alpha = 0.65f)
-                } else {
-                    NavyBorder
-                },
+                showTextLabel = false,
+                label = "Football",
                 onClick = {
-                    if (selectedSport == SportType.FOOTBALL) {
-                        onSportSelect(SportType.ALL)
-                    } else {
-                        onSportSelect(SportType.FOOTBALL)
-                    }
+                    onSportSelect(if (selectedSport == SportType.FOOTBALL) SportType.ALL else SportType.FOOTBALL)
+                }
+            )
+
+            SportIconTopCard(
+                sportType = SportType.BOXING,
+                badgeCount = boxingCount,
+                isSelected = selectedSport == SportType.BOXING,
+                showTextLabel = false,
+                label = "Boxing",
+                onClick = {
+                    onSportSelect(if (selectedSport == SportType.BOXING) SportType.ALL else SportType.BOXING)
+                }
+            )
+
+            SportIconTopCard(
+                sportType = SportType.RACING,
+                badgeCount = racingCount,
+                isSelected = selectedSport == SportType.RACING,
+                showTextLabel = false,
+                label = "Motorsport",
+                onClick = {
+                    onSportSelect(if (selectedSport == SportType.RACING) SportType.ALL else SportType.RACING)
                 }
             )
         }
 
-        // Neatly Organized Status Filter Row (All, Live, Upcoming, Finished) in a unified 4-tab bar
-        Surface(
+        // 2. Status Filter Pills Row: All (16), Live (4), Upcoming (12), Finished (...)
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            color = NavySurface,
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NavyBorder)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StatusFilterSegment(
-                    modifier = Modifier.weight(1f),
-                    label = "All",
-                    isSelected = selectedStatus == null,
-                    activeBrush = Brush.horizontalGradient(
-                        colors = listOf( Color(0xFF0284C7), Color(0xFF00B4D8))
-                    ),
-                    dotColor = null,
-                    onClick = { onStatusSelect(null) },
-                    tag = "filter_all"
-                )
-                StatusFilterSegment(
-                    modifier = Modifier.weight(1f),
-                    label = "Live",
-                    isSelected = selectedStatus == MatchStatus.LIVE,
-                    activeBrush = Brush.horizontalGradient(
-                        colors = listOf(Color(0xFFDC2626), Color(0xFFEF4444))
-                    ),
-                    dotColor = LiveRed,
-                    onClick = {
-                        onStatusSelect(if (selectedStatus == MatchStatus.LIVE) null else MatchStatus.LIVE)
-                    },
-                    tag = "filter_live"
-                )
-                StatusFilterSegment(
-                    modifier = Modifier.weight(1f),
-                    label = "Upcoming",
-                    isSelected = selectedStatus == MatchStatus.UPCOMING,
-                    activeBrush = Brush.horizontalGradient(
-                        colors = listOf(Color(0xFF0284C7), Color(0xFF38BDF8))
-                    ),
-                    dotColor = null,
-                    onClick = {
-                        onStatusSelect(if (selectedStatus == MatchStatus.UPCOMING) null else MatchStatus.UPCOMING)
-                    },
-                    tag = "filter_upcoming"
-                )
-                StatusFilterSegment(
-                    modifier = Modifier.weight(1f),
-                    label = "Finished",
-                    isSelected = selectedStatus == MatchStatus.FINISHED,
-                    activeBrush = Brush.horizontalGradient(
-                        colors = listOf(Color(0xFF334155), Color(0xFF475569))
-                    ),
-                    dotColor = null,
-                    onClick = {
-                        onStatusSelect(if (selectedStatus == MatchStatus.FINISHED) null else MatchStatus.FINISHED)
-                    },
-                    tag = "filter_finished"
-                )
-            }
+            StatusFilterPill(
+                label = "All ($allStatusCount)",
+                isSelected = selectedStatus == null,
+                onClick = { onStatusSelect(null) },
+                tag = "filter_all"
+            )
+            StatusFilterPill(
+                label = "Live ($liveStatusCount)",
+                isSelected = selectedStatus == MatchStatus.LIVE,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.LIVE) null else MatchStatus.LIVE)
+                },
+                tag = "filter_live"
+            )
+            StatusFilterPill(
+                label = "Upcoming ($upcomingStatusCount)",
+                isSelected = selectedStatus == MatchStatus.UPCOMING,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.UPCOMING) null else MatchStatus.UPCOMING)
+                },
+                tag = "filter_upcoming"
+            )
+            StatusFilterPill(
+                label = "Finished ($finishedStatusCount)",
+                isSelected = selectedStatus == MatchStatus.FINISHED,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.FINISHED) null else MatchStatus.FINISHED)
+                },
+                tag = "filter_finished"
+            )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
+        // 3. Match Cards List
         if (filteredMatches.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -246,55 +222,29 @@ fun LiveEventsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 if (isCrexLoading) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(
-                            color = CyanAccent,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(40.dp)
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "Loading Live Match Updates...",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                    }
+                    CircularProgressIndicator(
+                        color = Color(0xFF00D1C1),
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(38.dp)
+                    )
                 } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (selectedSport == SportType.CRICKET) {
-                            PremiumCricketEmblem(size = 56.dp, isSelected = true)
-                        } else {
-                            PremiumFootballEmblem(size = 56.dp, isSelected = true)
-                        }
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "No Matches Found",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Tap All, Live, Upcoming, or Finished above to switch match filters.",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = TextSecondary
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                    Text(
+                        text = "No Matches Found",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            color = TextSecondary,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         } else {
-            // Match list directly below Status Filter Row — no "LIVE NOW" text header
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 2.dp, bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(horizontal = 10.dp),
+                contentPadding = PaddingValues(top = 2.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(
                     items = filteredMatches,
@@ -313,113 +263,109 @@ fun LiveEventsScreen(
 }
 
 @Composable
-private fun PremiumSportSelectorCard(
-    modifier: Modifier = Modifier,
-    label: String,
-    subtitle: String,
+private fun SportIconTopCard(
     sportType: SportType,
+    badgeCount: Int,
     isSelected: Boolean,
-    isIlluminated: Boolean,
-    gradientColors: List<Color>,
-    borderColor: Color,
+    showTextLabel: Boolean,
+    label: String,
     onClick: () -> Unit
 ) {
+    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF223147)
+    val borderWidth = if (isSelected) 1.6.dp else 1.2.dp
+
     Box(
-        modifier = modifier
-            .height(58.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Brush.horizontalGradient(colors = gradientColors))
-            .border(
-                width = if (isSelected) 1.6.dp else 1.1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(16.dp)
-            )
+        modifier = Modifier
+            .height(68.dp)
+            .width(if (showTextLabel) 114.dp else 70.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF0E1624))
+            .border(borderWidth, borderColor, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("sport_chip_${label.lowercase()}")
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("sport_chip_${label.lowercase()}"),
+        contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.Center
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
             ) {
-                if (sportType == SportType.CRICKET) {
-                    PremiumCricketEmblem(size = 38.dp, isSelected = isIlluminated)
-                } else {
-                    PremiumFootballEmblem(size = 38.dp, isSelected = isIlluminated)
+                when (sportType) {
+                    SportType.ALL -> AllSportOutlineIcon()
+                    SportType.CRICKET -> CricketOutlineIcon()
+                    SportType.FOOTBALL -> FootballOutlineIcon()
+                    SportType.BOXING -> BoxingOutlineIcon()
+                    SportType.RACING -> RacingCarOutlineIcon()
+                    else -> AllSportOutlineIcon()
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column(verticalArrangement = Arrangement.Center) {
+                // Red circular count badge with white border at top-left
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(x = (-2).dp, y = (-2).dp)
+                        .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE53935))
+                        .border(1.2.dp, Color.White, CircleShape)
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = label,
-                        style = MaterialTheme.typography.titleSmall.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            letterSpacing = 0.2.sp
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = subtitle,
+                        text = badgeCount.toString(),
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isSelected) Color(0xFFE0F2FE) else CyanAccent,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
                             fontSize = 10.sp
                         ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 1
                     )
                 }
             }
 
-            // Active status dot indicator
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isSelected) Color.White
-                        else if (isIlluminated) CyanAccent
-                        else TextTertiary.copy(alpha = 0.5f)
-                    )
-            )
+            if (showTextLabel) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun StatusFilterSegment(
-    modifier: Modifier = Modifier,
+private fun StatusFilterPill(
     label: String,
     isSelected: Boolean,
-    activeBrush: Brush,
-    dotColor: Color?,
     onClick: () -> Unit,
     tag: String
 ) {
-    val shape = RoundedCornerShape(10.dp)
+    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF233246)
+    val bgColor = if (isSelected) Color(0xFF152336) else Color(0xFF121B2A)
+
     Box(
-        modifier = modifier
-            .height(36.dp)
-            .clip(shape)
-            .then(
-                if (isSelected) {
-                    Modifier.background(activeBrush, shape)
-                } else {
-                    Modifier.background(Color.Transparent, shape)
-                }
+        modifier = Modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(50))
+            .background(bgColor)
+            .border(
+                width = if (isSelected) 1.5.dp else 1.2.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(50)
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp)
+            .padding(horizontal = 18.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center
     ) {
@@ -427,26 +373,200 @@ private fun StatusFilterSegment(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            if (dotColor != null) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(if (isSelected) Color.White else dotColor)
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(5.dp))
+                Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                    color = if (isSelected) Color.White else TextPrimary.copy(alpha = 0.85f),
-                    fontSize = 12.sp
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                    color = Color.White,
+                    fontSize = 15.sp
                 ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
+                maxLines = 1
             )
         }
+    }
+}
+
+@Composable
+private fun AllSportOutlineIcon() {
+    Box(
+        modifier = Modifier.size(44.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            val r = size.minDimension * 0.42f
+            val c = Offset(size.width / 2f, size.height / 2f)
+            drawCircle(
+                color = Color.White,
+                radius = r,
+                center = c,
+                style = stroke
+            )
+            drawCircle(
+                color = Color.White,
+                radius = r * 0.76f,
+                center = c,
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+        }
+        Text(
+            text = "ALL",
+            style = MaterialTheme.typography.labelSmall.copy(
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp
+            )
+        )
+    }
+}
+
+@Composable
+private fun CricketOutlineIcon() {
+    Canvas(modifier = Modifier.size(44.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 2.dp.toPx()
+
+        // Three vertical stumps
+        drawLine(Color.White, Offset(w * 0.30f, h * 0.28f), Offset(w * 0.34f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.42f, h * 0.25f), Offset(w * 0.44f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.54f, h * 0.24f), Offset(w * 0.54f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+
+        // Bails on top
+        drawLine(Color.White, Offset(w * 0.28f, h * 0.26f), Offset(w * 0.56f, h * 0.22f), strokeWidth = stroke, cap = StrokeCap.Round)
+
+        // Diagonal Cricket Bat on right
+        rotate(degrees = 25f, pivot = Offset(w * 0.68f, h * 0.55f)) {
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(w * 0.60f, h * 0.32f),
+                size = Size(w * 0.16f, h * 0.50f),
+                cornerRadius = CornerRadius(4f, 4f),
+                style = Stroke(width = stroke)
+            )
+            drawLine(
+                color = Color.White,
+                start = Offset(w * 0.68f, h * 0.12f),
+                end = Offset(w * 0.68f, h * 0.32f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+@Composable
+private fun FootballOutlineIcon() {
+    Canvas(modifier = Modifier.size(44.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 1.8.dp.toPx()
+        val c = Offset(w * 0.56f, h * 0.44f)
+        val r = w * 0.32f
+
+        // Soccer ball outline
+        drawCircle(color = Color.White, radius = r, center = c, style = Stroke(width = stroke))
+
+        // Inner pentagon
+        val pentPath = Path()
+        val pr = r * 0.45f
+        for (i in 0 until 5) {
+            val a = Math.toRadians(-90.0 + i * 72.0)
+            val px = c.x + (pr * cos(a)).toFloat()
+            val py = c.y + (pr * sin(a)).toFloat()
+            if (i == 0) pentPath.moveTo(px, py) else pentPath.lineTo(px, py)
+            val ox = c.x + (r * cos(a)).toFloat()
+            val oy = c.y + (r * sin(a)).toFloat()
+            drawLine(Color.White, Offset(px, py), Offset(ox, oy), strokeWidth = stroke * 0.85f)
+        }
+        pentPath.close()
+        drawPath(pentPath, color = Color.White, style = Stroke(width = stroke * 0.9f))
+
+        // Speed motion lines at bottom-left
+        drawLine(Color.White, Offset(w * 0.14f, h * 0.86f), Offset(w * 0.34f, h * 0.68f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.24f, h * 0.92f), Offset(w * 0.44f, h * 0.74f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.12f, h * 0.72f), Offset(w * 0.26f, h * 0.58f), strokeWidth = stroke, cap = StrokeCap.Round)
+    }
+}
+
+@Composable
+private fun BoxingOutlineIcon() {
+    Canvas(modifier = Modifier.size(44.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 1.8.dp.toPx()
+
+        // Left boxing glove
+        rotate(degrees = -18f, pivot = Offset(w * 0.38f, h * 0.52f)) {
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(w * 0.18f, h * 0.26f),
+                size = Size(w * 0.34f, h * 0.36f),
+                cornerRadius = CornerRadius(w * 0.14f, w * 0.14f),
+                style = Stroke(width = stroke)
+            )
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(w * 0.22f, h * 0.62f),
+                size = Size(w * 0.26f, h * 0.16f),
+                cornerRadius = CornerRadius(4f, 4f),
+                style = Stroke(width = stroke)
+            )
+        }
+
+        // Right boxing glove
+        rotate(degrees = 18f, pivot = Offset(w * 0.64f, h * 0.52f)) {
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(w * 0.48f, h * 0.26f),
+                size = Size(w * 0.34f, h * 0.36f),
+                cornerRadius = CornerRadius(w * 0.14f, w * 0.14f),
+                style = Stroke(width = stroke)
+            )
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(w * 0.52f, h * 0.62f),
+                size = Size(w * 0.26f, h * 0.16f),
+                cornerRadius = CornerRadius(4f, 4f),
+                style = Stroke(width = stroke)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RacingCarOutlineIcon() {
+    Canvas(modifier = Modifier.size(44.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 1.8.dp.toPx()
+
+        // Race car chassis body
+        val bodyPath = Path().apply {
+            moveTo(w * 0.10f, h * 0.64f)
+            lineTo(w * 0.16f, h * 0.44f)
+            lineTo(w * 0.38f, h * 0.44f)
+            lineTo(w * 0.52f, h * 0.34f)
+            lineTo(w * 0.72f, h * 0.46f)
+            lineTo(w * 0.90f, h * 0.52f)
+            lineTo(w * 0.92f, h * 0.64f)
+            close()
+        }
+        drawPath(bodyPath, color = Color.White, style = Stroke(width = stroke))
+
+        // Left & right wheels
+        drawCircle(color = Color(0xFF0E1624), radius = w * 0.12f, center = Offset(w * 0.26f, h * 0.66f))
+        drawCircle(color = Color.White, radius = w * 0.12f, center = Offset(w * 0.26f, h * 0.66f), style = Stroke(width = stroke))
+        drawCircle(color = Color(0xFF0E1624), radius = w * 0.12f, center = Offset(w * 0.74f, h * 0.66f))
+        drawCircle(color = Color.White, radius = w * 0.12f, center = Offset(w * 0.74f, h * 0.66f), style = Stroke(width = stroke))
     }
 }

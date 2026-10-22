@@ -53,16 +53,18 @@ fun MenuScreen(
         // App Logo & Header
         Box(
             modifier = Modifier
-                .size(76.dp)
+                .size(84.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF070B19))
-                .border(2.dp, CyanAccent.copy(alpha = 0.6f), RoundedCornerShape(20.dp)),
+                .background(Color.White)
+                .border(2.dp, Color(0xFFFF5722), RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center
         ) {
             Image(
                 painter = painterResource(id = R.drawable.ic_app_logo),
-                contentDescription = "App Logo",
-                modifier = Modifier.fillMaxSize()
+                contentDescription = "Sports Live Logo",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp)
             )
         }
 
@@ -215,91 +217,6 @@ fun MenuScreen(
                             uncheckedTrackColor = NavySurfaceVariant
                         ),
                         modifier = Modifier.testTag("switch_force_low_quality")
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Highlighted Admin Panel Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(1.5.dp, GoldYellow.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
-                    .clickable(onClick = onAdminPanelClick)
-                    .testTag("menu_admin_panel"),
-                colors = CardDefaults.cardColors(containerColor = NavyCard)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(GoldYellow.copy(alpha = 0.15f))
-                                .border(1.dp, GoldYellow.copy(alpha = 0.4f), RoundedCornerShape(10.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.AdminPanelSettings,
-                                contentDescription = "Admin Panel",
-                                tint = GoldYellow,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Admin Panel",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary,
-                                        fontSize = 15.sp
-                                    )
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(GoldYellow)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "CONTROL",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = Color.Black,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 9.sp
-                                        )
-                                    )
-                                }
-                            }
-                            Text(
-                                text = "M3U8 checker, Multiple stream channels & match control",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = TextSecondary,
-                                    fontSize = 11.sp
-                                )
-                            )
-                        }
-                    }
-
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForwardIos,
-                        contentDescription = null,
-                        tint = GoldYellow,
-                        modifier = Modifier.size(16.dp)
                     )
                 }
             }

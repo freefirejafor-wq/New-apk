@@ -51,6 +51,7 @@ class SportsStreamRepository(
     private val favoriteChannelIds = mutableSetOf<String>()
     private val footballMatches = mutableListOf<LiveMatch>()
     private val cloudMatchOverrides = mutableMapOf<String, LiveMatch>()
+    private val deletedMatchIds = mutableSetOf<String>()
 
     private val _crexDashboardState = MutableStateFlow(CrexDashboardState())
     val crexDashboardState: StateFlow<CrexDashboardState> = _crexDashboardState.asStateFlow()
@@ -126,7 +127,12 @@ class SportsStreamRepository(
     }
 
     private fun applyCloudCatalogItems(items: List<CloudCatalogItem>) {
-        if (items.isEmpty()) return
+        cloudMatchOverrides.clear()
+        deletedMatchIds.clear()
+        if (items.isEmpty()) {
+            rebuildCombinedMatches()
+            return
+        }
         var channelsChanged = false
         val updatedChannels = _channels.value.toMutableList()
 
@@ -150,21 +156,34 @@ class SportsStreamRepository(
                 }
                 "channel" -> {
                     try {
-                        val ch = deserializeSingleChannel(JSONObject(item.payloadJson))
-                        val idx = updatedChannels.indexOfFirst { it.id == ch.id }
-                        if (idx >= 0) {
-                            updatedChannels[idx] = ch.copy(isFavorite = updatedChannels[idx].isFavorite || ch.id in favoriteChannelIds)
+                        val obj = JSONObject(item.payloadJson)
+                        if (obj.optBoolean("deleted", false)) {
+                            val delId = obj.optString("id")
+                            updatedChannels.removeAll { it.id == delId }
+                            channelsChanged = true
                         } else {
-                            updatedChannels.add(0, ch.copy(isFavorite = ch.id in favoriteChannelIds))
+                            val ch = deserializeSingleChannel(obj)
+                            val idx = updatedChannels.indexOfFirst { it.id == ch.id }
+                            if (idx >= 0) {
+                                updatedChannels[idx] = ch.copy(isFavorite = updatedChannels[idx].isFavorite || ch.id in favoriteChannelIds)
+                            } else {
+                                updatedChannels.add(0, ch.copy(isFavorite = ch.id in favoriteChannelIds))
+                            }
+                            channelsChanged = true
                         }
-                        channelsChanged = true
                     } catch (_: Exception) {
                     }
                 }
                 "match" -> {
                     try {
-                        val m = deserializeSingleMatch(JSONObject(item.payloadJson))
-                        cloudMatchOverrides[m.id] = m
+                        val obj = JSONObject(item.payloadJson)
+                        if (obj.optBoolean("deleted", false)) {
+                            val delId = obj.optString("id")
+                            if (delId.isNotBlank()) deletedMatchIds.add(delId)
+                        } else {
+                            val m = deserializeSingleMatch(obj)
+                            cloudMatchOverrides[m.id] = m
+                        }
                     } catch (_: Exception) {
                     }
                 }
@@ -187,13 +206,20 @@ class SportsStreamRepository(
         if (savedConfigJson != null) {
             try {
                 val obj = JSONObject(savedConfigJson)
-                val rawTitle = obj.optString("appTitle", "SportzX Live TV")
-                val resolvedTitle = if (rawTitle.equals("Football Live Tv", ignoreCase = true)) "SportzX Live TV" else rawTitle
-                val rawAnnounce = obj.optString("announcement", "Welcome to SportzX Live TV! Enjoy real-time match updates & multi-server HD streams.")
-                val resolvedAnnounce = rawAnnounce.replace("Football Live TV", "SportzX Live TV", ignoreCase = true)
+                val rawTitle = obj.optString("appTitle", "Sports Live")
+                val resolvedTitle = if (
+                    rawTitle.equals("Football Live Tv", ignoreCase = true) ||
+                    rawTitle.equals("SportzX Live TV", ignoreCase = true) ||
+                    rawTitle.equals("NovaStream TV", ignoreCase = true)
+                ) "Sports Live" else rawTitle
+                val rawAnnounce = obj.optString("announcement", "Welcome to Sports Live! Enjoy real-time match updates & multi-server HD streams.")
+                val resolvedAnnounce = rawAnnounce
+                    .replace("Football Live TV", "Sports Live", ignoreCase = true)
+                    .replace("SportzX Live TV", "Sports Live", ignoreCase = true)
+                    .replace("NovaStream TV", "Sports Live", ignoreCase = true)
                 _config.value = AppConfig(
                     appTitle = resolvedTitle,
-                    version = obj.optString("version", "8.0"),
+                    version = obj.optString("version", "9.0"),
                     announcement = resolvedAnnounce,
                     telegramLink = obj.optString("telegramLink", "https://t.me/sports_live_streams"),
                     adminPin = obj.optString("adminPin", "1234"),
@@ -281,26 +307,26 @@ class SportsStreamRepository(
 
     private fun rebuildCombinedMatches() {
         val state = _crexDashboardState.value
-        val fbWithFavs = applyFavorites(footballMatches)
+        val fbWithFavs = applyFavorites(footballMatches.filter { it.id !in deletedMatchIds })
         val baseIds = (state.liveState.matches.map { it.id } +
             state.upcomingState.matches.map { it.id } +
             state.finishedState.matches.map { it.id } +
             footballMatches.map { it.id }).toSet()
 
         val standaloneCloudMatches = cloudMatchOverrides.values
-            .filter { it.id !in baseIds }
+            .filter { it.id !in baseIds && it.id !in deletedMatchIds }
             .map { it.copy(isFavorite = it.id in favoriteMatchIds) }
 
         val combined = buildList {
             addAll(standaloneCloudMatches.filter { it.status == MatchStatus.LIVE })
-            addAll(applyFavorites(state.liveState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.LIVE })
+            addAll(applyFavorites(state.liveState.matches.filter { it.id !in deletedMatchIds }))
             addAll(standaloneCloudMatches.filter { it.status == MatchStatus.UPCOMING })
-            addAll(applyFavorites(state.upcomingState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.UPCOMING })
+            addAll(applyFavorites(state.upcomingState.matches.filter { it.id !in deletedMatchIds }))
             addAll(standaloneCloudMatches.filter { it.status == MatchStatus.FINISHED })
-            addAll(applyFavorites(state.finishedState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.FINISHED })
+            addAll(applyFavorites(state.finishedState.matches.filter { it.id !in deletedMatchIds }))
         }.distinctBy { "${it.status}_${it.id}" }
         _matches.value = combined
     }
@@ -1329,80 +1355,254 @@ class SportsStreamRepository(
         val streamHls2 = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8"
         val streamHls3 = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
+        val defaultStreams = listOf(
+            StreamSource(name = "SERVER 1 FHD", quality = "1080p FHD", url = streamHls1, isDefault = true),
+            StreamSource(name = "SERVER 2 HD", quality = "720p HD", url = streamHls2),
+            StreamSource(name = "BACKUP SD", quality = "480p SD", url = streamHls3)
+        )
+
         return listOf(
+            // 4 LIVE MATCHES (Matching screenshot order 100%)
             LiveMatch(
-                id = "fb-ucl-2026-rm-bvb",
-                tournament = "UEFA CHAMPIONS LEAGUE • LEAGUE PHASE",
-                sport = SportType.FOOTBALL,
+                id = "cric-t20-nz-ind",
+                tournament = "CRICKET | T20 INTERNATIONAL",
+                sport = SportType.CRICKET,
                 status = MatchStatus.LIVE,
-                matchTime = "Live Now • Santiago Bernabéu, Madrid",
-                timeOrScore = "",
-                team1Name = "Real Madrid",
-                team1Code = "RMA",
-                team1FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/86.png",
-                team2Name = "Borussia Dortmund",
-                team2Code = "BVB",
-                team2FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/124.png",
-                streams = listOf(
-                    StreamSource(name = "TNT SPORTS 1 FHD", quality = "1080p FHD", url = streamHls1, isDefault = true),
-                    StreamSource(name = "SONY TEN 2 HD", quality = "720p HD", url = streamHls2),
-                    StreamSource(name = "BEIN SPORTS 1", quality = "480p SD", url = streamHls3)
-                )
+                matchTime = "Live",
+                timeOrScore = "01:56:40",
+                team1Name = "New Zealand",
+                team1Code = "NZ",
+                team1FlagUrl = "https://flagcdn.com/w160/nz.png",
+                team2Name = "India",
+                team2Code = "IND",
+                team2FlagUrl = "https://flagcdn.com/w160/in.png",
+                streams = defaultStreams
             ),
             LiveMatch(
-                id = "fb-ucl-2026-bar-bay",
-                tournament = "UEFA CHAMPIONS LEAGUE • LEAGUE PHASE",
+                id = "cric-wtc-sa-aus",
+                tournament = "CRICKET | ICC WORLD TEST CHAMPIONSHIP",
+                sport = SportType.CRICKET,
+                status = MatchStatus.LIVE,
+                matchTime = "Live",
+                timeOrScore = "01:06:40",
+                team1Name = "South Africa",
+                team1Code = "SA",
+                team1FlagUrl = "https://flagcdn.com/w160/za.png",
+                team2Name = "Australia",
+                team2Code = "AUS",
+                team2FlagUrl = "https://flagcdn.com/w160/au.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "cric-odi-sl-eng",
+                tournament = "CRICKET | ODI TRI-SERIES IN PAKISTAN",
+                sport = SportType.CRICKET,
+                status = MatchStatus.LIVE,
+                matchTime = "Live",
+                timeOrScore = "00:56:40",
+                team1Name = "Sri Lanka",
+                team1Code = "SL",
+                team1FlagUrl = "https://flagcdn.com/w160/lk.png",
+                team2Name = "England",
+                team2Code = "ENG",
+                team2FlagUrl = "https://flagcdn.com/w160/gb-eng.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "cric-wt20-ausw-nzw",
+                tournament = "CRICKET | TWENTY20 INTERNATIONAL WOMEN",
+                sport = SportType.CRICKET,
+                status = MatchStatus.LIVE,
+                matchTime = "Live",
+                timeOrScore = "00:41:40",
+                team1Name = "Australia Women",
+                team1Code = "AUS-W",
+                team1FlagUrl = "https://flagcdn.com/w160/au.png",
+                team2Name = "New Zealand Women",
+                team2Code = "NZ-W",
+                team2FlagUrl = "https://flagcdn.com/w160/nz.png",
+                streams = defaultStreams
+            ),
+            // UPCOMING MATCHES (Matching screenshot order 100%)
+            LiveMatch(
+                id = "fb-spl-hazem-fayha",
+                tournament = "FOOTBALL | SAUDI PRO LEAGUE",
                 sport = SportType.FOOTBALL,
                 status = MatchStatus.UPCOMING,
-                matchTime = "22 Oct 2026, 01:00 AM BST • Estadi Olímpic, Barcelona",
-                timeOrScore = "",
-                team1Name = "Barcelona",
-                team1Code = "BAR",
-                team1FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/83.png",
-                team2Name = "Bayern Munich",
-                team2Code = "BAY",
-                team2FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/132.png",
-                streams = listOf(
-                    StreamSource(name = "TNT SPORTS 1 FHD", quality = "1080p FHD", url = streamHls1, isDefault = true),
-                    StreamSource(name = "SONY TEN 2 HD", quality = "720p HD", url = streamHls2),
-                    StreamSource(name = "BEIN SPORTS ENGLISH", quality = "480p SD", url = streamHls3)
-                )
+                matchTime = "07:40 PM | 22/10/2026",
+                timeOrScore = "Starts in 4 hours",
+                team1Name = "Al-Hazem",
+                team1Code = "Al-Hazem",
+                team1FlagUrl = "https://flagcdn.com/w160/sa.png",
+                team2Name = "Al-Fayha",
+                team2Code = "Al-Fayha",
+                team2FlagUrl = "https://flagcdn.com/w160/sa.png",
+                streams = defaultStreams
             ),
             LiveMatch(
-                id = "fb-epl-2026-ars-liv",
-                tournament = "ENGLISH PREMIER LEAGUE • MATCHWEEK 9",
-                sport = SportType.FOOTBALL,
+                id = "mgp-motogp-1",
+                tournament = "MOTORSPORT | MOTOGP",
+                sport = SportType.RACING,
                 status = MatchStatus.UPCOMING,
-                matchTime = "25 Oct 2026, 09:30 PM BST • Emirates Stadium, London",
-                timeOrScore = "",
-                team1Name = "Arsenal",
-                team1Code = "ARS",
-                team1FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/359.png",
-                team2Name = "Liverpool",
-                team2Code = "LIV",
-                team2FlagUrl = "https://a.espncdn.com/i/teamlogos/soccer/500/364.png",
-                streams = listOf(
-                    StreamSource(name = "SKY SPORTS MAIN EVENT", quality = "1080p FHD", url = streamHls2, isDefault = true),
-                    StreamSource(name = "STAR SPORTS SELECT 1", quality = "720p HD", url = streamHls1)
-                )
+                matchTime = "05:30 AM | 23/10/2026",
+                timeOrScore = "Starts in 14 hours",
+                team1Name = "MotoGP",
+                team1Code = "MotoGP",
+                team1FlagUrl = "",
+                team2Name = "MotoGP",
+                team2Code = "MotoGP",
+                team2FlagUrl = "",
+                streams = defaultStreams
             ),
             LiveMatch(
-                id = "fb-wcq-2026-arg-bra",
-                tournament = "FIFA WORLD CUP QUALIFIERS • CONMEBOL",
-                sport = SportType.FOOTBALL,
-                status = MatchStatus.FINISHED,
-                matchTime = "Full Time • Estadio Monumental, Buenos Aires",
-                timeOrScore = "",
-                team1Name = "Argentina",
-                team1Code = "ARG",
-                team1FlagUrl = "https://flagcdn.com/w160/ar.png",
-                team2Name = "Brazil",
-                team2Code = "BRA",
-                team2FlagUrl = "https://flagcdn.com/w160/br.png",
-                streams = listOf(
-                    StreamSource(name = "TYC SPORTS REPLAY HD", quality = "1080p FHD", url = streamHls1, isDefault = true),
-                    StreamSource(name = "BEIN SPORTS REPLAY", quality = "720p HD", url = streamHls2)
-                )
+                id = "cric-odi-pak-nz",
+                tournament = "CRICKET | ODI TRI-SERIES IN PAKISTAN",
+                sport = SportType.CRICKET,
+                status = MatchStatus.UPCOMING,
+                matchTime = "03:00 PM | 23/10/2026",
+                timeOrScore = "Starts in 8 hours",
+                team1Name = "Pakistan",
+                team1Code = "PAK",
+                team1FlagUrl = "https://flagcdn.com/w160/pk.png",
+                team2Name = "New Zealand",
+                team2Code = "NZ",
+                team2FlagUrl = "https://flagcdn.com/w160/nz.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "cric-t20-ban-wi",
+                tournament = "CRICKET | T20 INTERNATIONAL",
+                sport = SportType.CRICKET,
+                status = MatchStatus.UPCOMING,
+                matchTime = "06:00 PM | 23/10/2026",
+                timeOrScore = "Starts in 11 hours",
+                team1Name = "Bangladesh",
+                team1Code = "BAN",
+                team1FlagUrl = "https://flagcdn.com/w160/bd.png",
+                team2Name = "West Indies",
+                team2Code = "WI",
+                team2FlagUrl = "https://flagcdn.com/w160/jm.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "cric-odi-afg-zim",
+                tournament = "CRICKET | ODI INTERNATIONAL",
+                sport = SportType.CRICKET,
+                status = MatchStatus.UPCOMING,
+                matchTime = "01:30 PM | 24/10/2026",
+                timeOrScore = "Starts in 18 hours",
+                team1Name = "Afghanistan",
+                team1Code = "AFG",
+                team1FlagUrl = "https://flagcdn.com/w160/af.png",
+                team2Name = "Zimbabwe",
+                team2Code = "ZIM",
+                team2FlagUrl = "https://flagcdn.com/w160/zw.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "cric-t20-ire-sco",
+                tournament = "CRICKET | T20 INTERNATIONAL",
+                sport = SportType.CRICKET,
+                status = MatchStatus.UPCOMING,
+                matchTime = "07:00 PM | 24/10/2026",
+                timeOrScore = "Starts in 22 hours",
+                team1Name = "Ireland",
+                team1Code = "IRE",
+                team1FlagUrl = "https://flagcdn.com/w160/ie.png",
+                team2Name = "Scotland",
+                team2Code = "SCO",
+                team2FlagUrl = "https://flagcdn.com/w160/gb-sct.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "box-ufc-1",
+                tournament = "BOXING | WORLD HEAVYWEIGHT CHAMPIONSHIP",
+                sport = SportType.BOXING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "10:00 PM | 24/10/2026",
+                timeOrScore = "Starts in 6 hours",
+                team1Name = "United Kingdom",
+                team1Code = "ENG",
+                team1FlagUrl = "https://flagcdn.com/w160/gb-eng.png",
+                team2Name = "Ukraine",
+                team2Code = "UKR",
+                team2FlagUrl = "https://flagcdn.com/w160/ua.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "box-ufc-2",
+                tournament = "BOXING | WBC MIDDLEWEIGHT TITLE",
+                sport = SportType.BOXING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "11:30 PM | 24/10/2026",
+                timeOrScore = "Starts in 9 hours",
+                team1Name = "Mexico",
+                team1Code = "MEX",
+                team1FlagUrl = "https://flagcdn.com/w160/mx.png",
+                team2Name = "United States",
+                team2Code = "USA",
+                team2FlagUrl = "https://flagcdn.com/w160/us.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "box-ufc-3",
+                tournament = "BOXING | WBA LIGHTWEIGHT BOUT",
+                sport = SportType.BOXING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "01:00 AM | 25/10/2026",
+                timeOrScore = "Starts in 12 hours",
+                team1Name = "Japan",
+                team1Code = "JPN",
+                team1FlagUrl = "https://flagcdn.com/w160/jp.png",
+                team2Name = "Australia",
+                team2Code = "AUS",
+                team2FlagUrl = "https://flagcdn.com/w160/au.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "box-ufc-4",
+                tournament = "BOXING | IBF WELTERWEIGHT BOUT",
+                sport = SportType.BOXING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "02:30 AM | 25/10/2026",
+                timeOrScore = "Starts in 15 hours",
+                team1Name = "Canada",
+                team1Code = "CAN",
+                team1FlagUrl = "https://flagcdn.com/w160/ca.png",
+                team2Name = "France",
+                team2Code = "FRA",
+                team2FlagUrl = "https://flagcdn.com/w160/fr.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "box-ufc-5",
+                tournament = "BOXING | WBO CRUISERWEIGHT TITLE",
+                sport = SportType.BOXING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "04:00 AM | 25/10/2026",
+                timeOrScore = "Starts in 18 hours",
+                team1Name = "Brazil",
+                team1Code = "BRA",
+                team1FlagUrl = "https://flagcdn.com/w160/br.png",
+                team2Name = "Argentina",
+                team2Code = "ARG",
+                team2FlagUrl = "https://flagcdn.com/w160/ar.png",
+                streams = defaultStreams
+            ),
+            LiveMatch(
+                id = "mgp-f1-2",
+                tournament = "MOTORSPORT | FORMULA 1 GRAND PRIX",
+                sport = SportType.RACING,
+                status = MatchStatus.UPCOMING,
+                matchTime = "08:00 PM | 25/10/2026",
+                timeOrScore = "Starts in 20 hours",
+                team1Name = "MotoGP",
+                team1Code = "MotoGP",
+                team1FlagUrl = "",
+                team2Name = "MotoGP",
+                team2Code = "MotoGP",
+                team2FlagUrl = "",
+                streams = defaultStreams
             )
         )
     }

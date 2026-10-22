@@ -58,8 +58,7 @@ import com.google.firebase.auth.auth
 enum class AppScreen {
     SPLASH,
     MAIN_TABS,
-    PLAYER,
-    ADMIN_PANEL
+    PLAYER
 }
 
 class MainActivity : ComponentActivity() {
@@ -171,7 +170,6 @@ fun FootballLiveTvApp(
     var showNetworkStreamDialog by remember { mutableStateOf(false) }
     var showM3UImportDialog by remember { mutableStateOf(false) }
     var showHighlightsDialog by remember { mutableStateOf(false) }
-    var showAdminPinDialog by remember { mutableStateOf(false) }
     var showScoresDialog by remember { mutableStateOf(false) }
     var scoresSportTitle by remember { mutableStateOf("Cricket") }
     var showAnnouncementBanner by remember { mutableStateOf(true) }
@@ -264,29 +262,13 @@ fun FootballLiveTvApp(
             )
         }
 
-        AppScreen.ADMIN_PANEL -> {
-            BackHandler {
-                currentScreen = AppScreen.MAIN_TABS
-            }
-            AdminPanelScreen(
-                repository = repository,
-                onBackClick = { currentScreen = AppScreen.MAIN_TABS },
-                onTestPlayStream = { testStream ->
-                    startPlaying(
-                        match = null,
-                        title = testStream.name,
-                        streams = listOf(testStream)
-                    )
-                }
-            )
-        }
-
         AppScreen.MAIN_TABS -> {
             Scaffold(
                 topBar = {
-                    Column {
-                        TopSportsBar(
-                            title = config.appTitle,
+                    if (selectedTab != NavTab.LIVE_EVENTS) {
+                        Column {
+                            TopSportsBar(
+                                title = config.appTitle,
                             onTelegramClick = { showTelegramDialog = true },
                             onRefreshClick = {
                                 coroutineScope.launch {
@@ -337,11 +319,12 @@ fun FootballLiveTvApp(
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f)
                                 )
-                                IconButton(
-                                    onClick = { showAnnouncementBanner = false },
-                                    modifier = Modifier.size(20.dp)
-                                ) {
-                                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                                    IconButton(
+                                        onClick = { showAnnouncementBanner = false },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                                    }
                                 }
                             }
                         }
@@ -607,9 +590,7 @@ fun FootballLiveTvApp(
                                         )
                                     }
                                 },
-                                onAdminPanelClick = {
-                                    showAdminPinDialog = true
-                                },
+                                onAdminPanelClick = {},
                                 onSignOutClick = {
                                     repository.stopCloudSync()
                                     signOut(
@@ -715,16 +696,6 @@ fun FootballLiveTvApp(
         )
     }
 
-    // Modal: Admin PIN verification
-    if (showAdminPinDialog) {
-        AdminPinDialog(
-            correctPin = config.adminPin,
-            onSuccess = {
-                currentScreen = AppScreen.ADMIN_PANEL
-            },
-            onDismiss = { showAdminPinDialog = false }
-        )
-    }
 
     // Modal: Scores dialog
     if (showScoresDialog) {
