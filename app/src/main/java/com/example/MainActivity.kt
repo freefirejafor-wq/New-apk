@@ -140,14 +140,6 @@ fun FootballLiveTvApp(
     val highlights by repository.highlights.collectAsState()
     val config by repository.config.collectAsState()
 
-    if (currentUser == null) {
-        AuthGateScreen(
-            appTitle = config.appTitle,
-            onAuthSuccess = {}
-        )
-        return
-    }
-
     var currentScreen by remember { mutableStateOf(AppScreen.SPLASH) }
     var selectedTab by remember { mutableStateOf(NavTab.LIVE_EVENTS) }
 

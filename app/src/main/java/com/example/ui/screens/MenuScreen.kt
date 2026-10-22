@@ -220,15 +220,6 @@ fun MenuScreen(
                     )
                 }
             }
-
-            if (!userEmail.isNullOrBlank() && onSignOutClick != null) {
-                MenuItemCard(
-                    icon = Icons.Default.AccountCircle,
-                    title = "Cloud Account ($userEmail)",
-                    subtitle = "Tap to sign out of Google Cloud Sync",
-                    onClick = onSignOutClick
-                )
-            }
         }
 
         Spacer(modifier = Modifier.height(28.dp))

@@ -139,6 +139,8 @@ jobs:
             rm -f app/src/main/res/drawable/ic_launcher_foreground.xml
           fi
           rm -f app/src/main/res/mipmap-*/*.webp
+          python3 -c 'import pathlib,re; p=pathlib.Path("app/src/main/java/com/example/MainActivity.kt"); p.write_text(re.sub(r"if\s*\(\s*currentUser\s*==\s*null\s*\)\s*\{\s*AuthGateScreen\(.*?return\s*\}","",p.read_text(),flags=re.S)) if p.exists() else None'
+          python3 -c 'import pathlib,re; m=pathlib.Path("app/src/main/java/com/example/ui/screens/MenuScreen.kt"); m.write_text(re.sub(r"if\s*\(\s*!userEmail\.isNullOrBlank\(\)\s*&&\s*onSignOutClick\s*!=\s*null\s*\)\s*\{\s*MenuItemCard\(.*?onClick\s*=\s*onSignOutClick\s*\)\s*\}","",m.read_text(),flags=re.S)) if m.exists() else None'
           sed -i 's/\r$//' gradlew || true
           chmod +x gradlew
 
