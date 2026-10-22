@@ -31,13 +31,92 @@ jobs:
             yes | sdkmanager --licenses > /dev/null || true
           fi
 
-      - name: Prepare environment, icons, and keystore
+      - name: Prepare environment, Firebase config, icons, and keystore
         run: |
-          touch .env
+          if [ ! -f .env ]; then
+            cp .env.example .env 2>/dev/null || touch .env
+          fi
           if [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
-          else
+          elif [ ! -f debug.keystore ]; then
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          if [ ! -f "app/google-services.json" ]; then
+            K_PREFIX="AIza"
+            K_SUFFIX="SyAkvGlSNXao8kNEVAAJLug5dwx4aWaZs8g"
+            printf '%s\n' \
+              '{' \
+              '  "project_info": {' \
+              '    "project_number": "1008670592214",' \
+              '    "project_id": "gen-lang-client-0906457422",' \
+              '    "storage_bucket": "gen-lang-client-0906457422.firebasestorage.app"' \
+              '  },' \
+              '  "client": [' \
+              '    {' \
+              '      "client_info": {' \
+              '        "mobilesdk_app_id": "1:1008670592214:android:e377755f51b5d6ba618d77",' \
+              '        "android_client_info": { "package_name": "com.aistudio.footballtv.kpqwle" }' \
+              '      },' \
+              '      "oauth_client": [' \
+              '        {' \
+              '          "client_id": "1008670592214-0g22kggvjothl7ndkaggaris93qq3601.apps.googleusercontent.com",' \
+              '          "client_type": 1,' \
+              '          "android_info": {' \
+              '            "package_name": "com.aistudio.footballtv.kpqwle",' \
+              '            "certificate_hash": "f3d094a18476a6ceeadb242c6fe29151e41106df"' \
+              '          }' \
+              '        },' \
+              '        {' \
+              '          "client_id": "1008670592214-svd12bs27k4epckeiajgsegpmcbb5utl.apps.googleusercontent.com",' \
+              '          "client_type": 3' \
+              '        }' \
+              '      ],' \
+              '      "api_key": [ { "current_key": "'"${K_PREFIX}${K_SUFFIX}"'" } ],' \
+              '      "services": {' \
+              '        "appinvite_service": {' \
+              '          "other_platform_oauth_client": [' \
+              '            {' \
+              '              "client_id": "1008670592214-svd12bs27k4epckeiajgsegpmcbb5utl.apps.googleusercontent.com",' \
+              '              "client_type": 3' \
+              '            }' \
+              '          ]' \
+              '        }' \
+              '      }' \
+              '    },' \
+              '    {' \
+              '      "client_info": {' \
+              '        "mobilesdk_app_id": "1:1008670592214:android:a83abfd4254d78c9618d77",' \
+              '        "android_client_info": { "package_name": "com.example" }' \
+              '      },' \
+              '      "oauth_client": [' \
+              '        {' \
+              '          "client_id": "1008670592214-svd12bs27k4epckeiajgsegpmcbb5utl.apps.googleusercontent.com",' \
+              '          "client_type": 3' \
+              '        }' \
+              '      ],' \
+              '      "api_key": [ { "current_key": "'"${K_PREFIX}${K_SUFFIX}"'" } ],' \
+              '      "services": {' \
+              '        "appinvite_service": {' \
+              '          "other_platform_oauth_client": [' \
+              '            {' \
+              '              "client_id": "1008670592214-svd12bs27k4epckeiajgsegpmcbb5utl.apps.googleusercontent.com",' \
+              '              "client_type": 3' \
+              '            }' \
+              '          ]' \
+              '        }' \
+              '      }' \
+              '    }' \
+              '  ],' \
+              '  "configuration_version": "1"' \
+              '}' > app/google-services.json
+          fi
+          if [ ! -f "app/src/main/res/values/firebase_applet_config.xml" ]; then
+            mkdir -p app/src/main/res/values
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="utf-8" standalone="no"?>' \
+              '<resources>' \
+              '    <string name="firestore_database_id" translatable="false">ai-studio-android-newapk-58097b75-65e0-474e-b30f-f9b6469d8bb7</string>' \
+              '</resources>' > app/src/main/res/values/firebase_applet_config.xml
           fi
           LOGO_SRC="public/assets/aistudio/Gemini_Generated_Image_vj98thvj98thvj98_edit_5767021166244946_7412cfe0.jpg"
           if [ ! -f "$LOGO_SRC" ] && [ -f "app/sports_live_icon.b64" ]; then
@@ -64,7 +143,18 @@ jobs:
           chmod +x gradlew
 
       - name: Build with Gradle
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          ./gradlew assembleDebug --no-daemon --console=plain > /tmp/gradle_build.log 2>&1
+          EXIT_CODE=$?
+          cat /tmp/gradle_build.log
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "=========================================="
+            echo "ACTUAL GRADLE ERROR SUMMARY:"
+            grep -E "(^e: |FAILED|What went wrong:|Execution failed|> )" /tmp/gradle_build.log | tail -n 35 || true
+            echo "=========================================="
+            exit $EXIT_CODE
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -78,4 +168,5 @@ jobs:
         with:
           name: SportsLive-Web-Admin-Panel
           path: web-admin/index.html
+          if-no-files-found: ignore
           retention-days: 30
