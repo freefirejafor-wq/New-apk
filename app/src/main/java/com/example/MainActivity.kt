@@ -35,9 +35,13 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.credentials.CredentialManager
 import com.example.data.model.*
 import com.example.data.repository.SportsStreamRepository
 import com.example.player.ExoPlayerManager
+import com.example.ui.auth.AuthGateScreen
+import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.signOut
 import com.example.ui.components.*
 import com.example.ui.dialogs.*
 import com.example.ui.screens.*
@@ -48,6 +52,8 @@ import com.example.ui.theme.NavyDark
 import com.example.ui.theme.NavySurfaceVariant
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 
 enum class AppScreen {
     SPLASH,
@@ -115,6 +121,18 @@ fun FootballLiveTvApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+
+    val currentUser by Firebase.auth.authStateFlow().collectAsState(initial = Firebase.auth.currentUser)
+
+    LaunchedEffect(currentUser?.uid) {
+        val uid = currentUser?.uid
+        if (uid != null) {
+            repository.startCloudSyncForUser(uid)
+        } else {
+            repository.stopCloudSync()
+        }
+    }
 
     val matches by repository.matches.collectAsState()
     val crexState by repository.crexDashboardState.collectAsState()
@@ -122,6 +140,14 @@ fun FootballLiveTvApp(
     val categories by repository.categories.collectAsState()
     val highlights by repository.highlights.collectAsState()
     val config by repository.config.collectAsState()
+
+    if (currentUser == null) {
+        AuthGateScreen(
+            appTitle = config.appTitle,
+            onAuthSuccess = {}
+        )
+        return
+    }
 
     var currentScreen by remember { mutableStateOf(AppScreen.SPLASH) }
     var selectedTab by remember { mutableStateOf(NavTab.LIVE_EVENTS) }
@@ -551,6 +577,7 @@ fun FootballLiveTvApp(
                         NavTab.MENU -> {
                             MenuScreen(
                                 config = config,
+                                userEmail = currentUser?.email,
                                 onNetworkStreamClick = { showNetworkStreamDialog = true },
                                 onPlaylistsClick = { showM3UImportDialog = true },
                                 onHighlightsClick = { showHighlightsDialog = true },
@@ -582,6 +609,15 @@ fun FootballLiveTvApp(
                                 },
                                 onAdminPanelClick = {
                                     showAdminPinDialog = true
+                                },
+                                onSignOutClick = {
+                                    repository.stopCloudSync()
+                                    signOut(
+                                        context = context,
+                                        credentialManager = credentialManager,
+                                        onSignOutComplete = {},
+                                        scope = coroutineScope
+                                    )
                                 }
                             )
                         }

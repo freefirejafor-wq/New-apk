@@ -1,0 +1,121 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        ('email' in request.auth.token &&
+         'email_verified' in request.auth.token &&
+         request.auth.token.email == 'masfitanha@gmail.com' &&
+         request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Validation Blueprint: UserFavorite
+    function isValidUserFavorite(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.itemId is string && data.itemId.size() >= 1 && data.itemId.size() <= 128 &&
+             data.itemType is string && (data.itemType == 'match' || data.itemType == 'channel') &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Validation Blueprint: CloudCatalogItem
+    function isValidCloudCatalogItem(data) {
+      return data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+             data.itemType is string && (data.itemType == 'match' || data.itemType == 'channel' || data.itemType == 'config') &&
+             data.visibility is string && (data.visibility == 'public' || data.visibility == 'private') &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+             data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 200000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 1. Per-User Synced Favorites (/users/{userId}/favorites/{favId})
+    match /users/{userId}/favorites/{favId} {
+      allow get: if isSignedIn() && isValidId(userId) && isValidId(favId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && request.auth.uid == userId && existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(favId) &&
+                       request.auth.uid == userId &&
+                       incoming().keys().hasAll(['userId', 'itemId', 'itemType', 'title', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'itemId', 'itemType', 'title', 'createdAt', 'updatedAt']) &&
+                       isValidUserFavorite(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(favId) &&
+                       request.auth.uid == userId &&
+                       isValidUserFavorite(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['itemId', 'itemType', 'title', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && isValidId(favId) && request.auth.uid == userId;
+    }
+
+    // 2. Cloud Admin & Broadcast Catalog (/cloud_items/{itemId})
+    match /cloud_items/{itemId} {
+      allow get: if isSignedIn() && isValidId(itemId) && (
+        existing().ownerId == request.auth.uid ||
+        existing().visibility == 'public' ||
+        isAdmin()
+      );
+
+      allow list: if isSignedIn() && (
+        existing().ownerId == request.auth.uid ||
+        existing().visibility == 'public'
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(itemId) &&
+                       incoming().ownerId == request.auth.uid &&
+                       incoming().keys().hasAll(['ownerId', 'itemType', 'visibility', 'title', 'payloadJson', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['ownerId', 'itemType', 'visibility', 'title', 'payloadJson', 'createdAt', 'updatedAt']) &&
+                       isValidCloudCatalogItem(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(itemId) &&
+                       isValidCloudCatalogItem(incoming()) &&
+                       incoming().ownerId == existing().ownerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (existing().ownerId == request.auth.uid || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['itemType', 'visibility', 'title', 'payloadJson', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(itemId) && (
+        existing().ownerId == request.auth.uid || isAdmin()
+      );
+    }
+
+    // 3. Trusted Admin Registry (/admins/{adminUid}) - Console-managed only
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && request.auth.uid == adminUid;
+      allow list, create, update, delete: if false;
+    }
+  }
+}

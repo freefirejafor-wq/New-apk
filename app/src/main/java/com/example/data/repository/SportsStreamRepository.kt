@@ -2,16 +2,24 @@ package com.example.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.data.cloud.CloudCatalogItem
+import com.example.data.cloud.CloudSyncRepository
 import com.example.data.crex.CrexCategoryFeedState
 import com.example.data.crex.CrexCricketService
 import com.example.data.crex.CrexDashboardState
 import com.example.data.crex.CrexMatchDetailState
 import com.example.data.model.*
 import com.example.data.util.TeamFlagResolver
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,8 +30,13 @@ import java.util.concurrent.TimeUnit
 
 class SportsStreamRepository(
     private val context: Context,
-    val crexService: CrexCricketService = CrexCricketService()
+    val crexService: CrexCricketService = CrexCricketService(),
+    val cloudSyncRepository: CloudSyncRepository = CloudSyncRepository(context)
 ) {
+
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var cloudCatalogJob: Job? = null
+    private var cloudFavoritesJob: Job? = null
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences("football_live_tv_prefs", Context.MODE_PRIVATE)
@@ -35,7 +48,9 @@ class SportsStreamRepository(
         .build()
 
     private val favoriteMatchIds = mutableSetOf<String>()
+    private val favoriteChannelIds = mutableSetOf<String>()
     private val footballMatches = mutableListOf<LiveMatch>()
+    private val cloudMatchOverrides = mutableMapOf<String, LiveMatch>()
 
     private val _crexDashboardState = MutableStateFlow(CrexDashboardState())
     val crexDashboardState: StateFlow<CrexDashboardState> = _crexDashboardState.asStateFlow()
@@ -55,8 +70,112 @@ class SportsStreamRepository(
     private val _config = MutableStateFlow(AppConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
+    private val _cloudSyncStatus = MutableStateFlow("Connected to Real-Time Cloud Server")
+    val cloudSyncStatus: StateFlow<String> = _cloudSyncStatus.asStateFlow()
+
     init {
         loadData()
+    }
+
+    /**
+     * Starts real-time Firestore snapshot listeners for public Admin catalog items
+     * (`cloud_items`) and per-user favorites (`users/{uid}/favorites`) once authenticated.
+     */
+    fun startCloudSyncForUser(userId: String) {
+        cloudCatalogJob?.cancel()
+        cloudFavoritesJob?.cancel()
+
+        cloudCatalogJob = repoScope.launch {
+            try {
+                cloudSyncRepository.observePublicCatalogItems().collect { items ->
+                    applyCloudCatalogItems(items)
+                }
+            } catch (e: Exception) {
+                _cloudSyncStatus.value = "Cloud Sync: ${e.localizedMessage ?: "Offline"}"
+            }
+        }
+
+        cloudFavoritesJob = repoScope.launch {
+            try {
+                cloudSyncRepository.observeUserFavorites(userId).collect { favs ->
+                    val matchFavs = favs.filter { it.itemType == "match" }.map { it.itemId }.toSet()
+                    val channelFavs = favs.filter { it.itemType == "channel" }.map { it.itemId }.toSet()
+                    if (matchFavs.isNotEmpty() || channelFavs.isNotEmpty()) {
+                        favoriteMatchIds.addAll(matchFavs)
+                        favoriteChannelIds.addAll(channelFavs)
+                        _channels.value = _channels.value.map { ch ->
+                            if (ch.id in favoriteChannelIds) ch.copy(isFavorite = true) else ch
+                        }
+                        rebuildCombinedMatches()
+                    }
+                }
+            } catch (_: Exception) {
+                // Handled by FirestoreErrorHandler
+            }
+        }
+    }
+
+    /**
+     * Stops active Firestore snapshot listeners immediately on sign-out.
+     */
+    fun stopCloudSync() {
+        cloudCatalogJob?.cancel()
+        cloudFavoritesJob?.cancel()
+        cloudCatalogJob = null
+        cloudFavoritesJob = null
+    }
+
+    private fun applyCloudCatalogItems(items: List<CloudCatalogItem>) {
+        if (items.isEmpty()) return
+        var channelsChanged = false
+        val updatedChannels = _channels.value.toMutableList()
+
+        for (item in items) {
+            when (item.itemType) {
+                "config" -> {
+                    try {
+                        val obj = JSONObject(item.payloadJson)
+                        val cur = _config.value
+                        _config.value = cur.copy(
+                            appTitle = obj.optString("appTitle", cur.appTitle).ifBlank { cur.appTitle },
+                            version = obj.optString("version", cur.version).ifBlank { cur.version },
+                            announcement = obj.optString("announcement", cur.announcement),
+                            telegramLink = obj.optString("telegramLink", cur.telegramLink),
+                            adminPin = obj.optString("adminPin", cur.adminPin).ifBlank { cur.adminPin },
+                            remoteFeedUrl = obj.optString("remoteFeedUrl", cur.remoteFeedUrl).ifBlank { cur.remoteFeedUrl },
+                            autoSyncOnLaunch = obj.optBoolean("autoSyncOnLaunch", cur.autoSyncOnLaunch)
+                        )
+                    } catch (_: Exception) {
+                    }
+                }
+                "channel" -> {
+                    try {
+                        val ch = deserializeSingleChannel(JSONObject(item.payloadJson))
+                        val idx = updatedChannels.indexOfFirst { it.id == ch.id }
+                        if (idx >= 0) {
+                            updatedChannels[idx] = ch.copy(isFavorite = updatedChannels[idx].isFavorite || ch.id in favoriteChannelIds)
+                        } else {
+                            updatedChannels.add(0, ch.copy(isFavorite = ch.id in favoriteChannelIds))
+                        }
+                        channelsChanged = true
+                    } catch (_: Exception) {
+                    }
+                }
+                "match" -> {
+                    try {
+                        val m = deserializeSingleMatch(JSONObject(item.payloadJson))
+                        cloudMatchOverrides[m.id] = m
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+
+        if (channelsChanged) {
+            _channels.value = updatedChannels
+        }
+        rebuildCombinedMatches()
+        _cloudSyncStatus.value = "Live Cloud Synced (${items.size} server items active)"
     }
 
     private fun loadData() {
@@ -138,18 +257,48 @@ class SportsStreamRepository(
 
     private fun applyFavorites(list: List<LiveMatch>): List<LiveMatch> {
         return list.map { m ->
-            m.copy(isFavorite = m.id in favoriteMatchIds)
+            val cloudOverride = cloudMatchOverrides[m.id]
+            val merged = if (cloudOverride != null) {
+                m.copy(
+                    tournament = cloudOverride.tournament.ifBlank { m.tournament },
+                    status = cloudOverride.status,
+                    matchTime = cloudOverride.matchTime.ifBlank { m.matchTime },
+                    timeOrScore = cloudOverride.timeOrScore.ifBlank { m.timeOrScore },
+                    team1Name = cloudOverride.team1Name.ifBlank { m.team1Name },
+                    team1Code = cloudOverride.team1Code.ifBlank { m.team1Code },
+                    team1FlagUrl = cloudOverride.team1FlagUrl.ifBlank { m.team1FlagUrl },
+                    team2Name = cloudOverride.team2Name.ifBlank { m.team2Name },
+                    team2Code = cloudOverride.team2Code.ifBlank { m.team2Code },
+                    team2FlagUrl = cloudOverride.team2FlagUrl.ifBlank { m.team2FlagUrl },
+                    streams = if (cloudOverride.streams.isNotEmpty()) cloudOverride.streams else m.streams
+                )
+            } else {
+                m
+            }
+            merged.copy(isFavorite = merged.id in favoriteMatchIds)
         }
     }
 
     private fun rebuildCombinedMatches() {
         val state = _crexDashboardState.value
         val fbWithFavs = applyFavorites(footballMatches)
+        val baseIds = (state.liveState.matches.map { it.id } +
+            state.upcomingState.matches.map { it.id } +
+            state.finishedState.matches.map { it.id } +
+            footballMatches.map { it.id }).toSet()
+
+        val standaloneCloudMatches = cloudMatchOverrides.values
+            .filter { it.id !in baseIds }
+            .map { it.copy(isFavorite = it.id in favoriteMatchIds) }
+
         val combined = buildList {
+            addAll(standaloneCloudMatches.filter { it.status == MatchStatus.LIVE })
             addAll(applyFavorites(state.liveState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.LIVE })
+            addAll(standaloneCloudMatches.filter { it.status == MatchStatus.UPCOMING })
             addAll(applyFavorites(state.upcomingState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.UPCOMING })
+            addAll(standaloneCloudMatches.filter { it.status == MatchStatus.FINISHED })
             addAll(applyFavorites(state.finishedState.matches))
             addAll(fbWithFavs.filter { it.status == MatchStatus.FINISHED })
         }.distinctBy { "${it.status}_${it.id}" }
@@ -265,6 +414,7 @@ class SportsStreamRepository(
 
     // Match Operations
     fun addOrUpdateMatch(match: LiveMatch) {
+        cloudMatchOverrides[match.id] = match
         val cur = _crexDashboardState.value
         fun upsert(list: List<LiveMatch>): List<LiveMatch> {
             val mList = list.toMutableList()
@@ -278,9 +428,21 @@ class SportsStreamRepository(
             MatchStatus.FINISHED -> cur.copy(finishedState = cur.finishedState.copy(matches = upsert(cur.finishedState.matches)))
         }
         rebuildCombinedMatches()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                cloudSyncRepository.upsertPublicCatalogItem(
+                    rawItemId = match.id,
+                    itemType = "match",
+                    title = "${match.team1Name} vs ${match.team2Name}",
+                    payloadJson = serializeSingleMatch(match).toString()
+                )
+            }
+        }
     }
 
     fun deleteMatch(matchId: String) {
+        cloudMatchOverrides.remove(matchId)
         val cur = _crexDashboardState.value
         _crexDashboardState.value = cur.copy(
             liveState = cur.liveState.copy(matches = cur.liveState.matches.filter { it.id != matchId }),
@@ -288,13 +450,22 @@ class SportsStreamRepository(
             finishedState = cur.finishedState.copy(matches = cur.finishedState.matches.filter { it.id != matchId })
         )
         rebuildCombinedMatches()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                cloudSyncRepository.deletePublicCatalogItem(matchId, "match")
+            }
+        }
     }
 
     fun toggleMatchFavorite(matchId: String) {
+        val added: Boolean
         if (matchId in favoriteMatchIds) {
             favoriteMatchIds.remove(matchId)
+            added = false
         } else {
             favoriteMatchIds.add(matchId)
+            added = true
         }
         val cur = _crexDashboardState.value
         _crexDashboardState.value = cur.copy(
@@ -304,6 +475,18 @@ class SportsStreamRepository(
         )
         rebuildCombinedMatches()
         saveData()
+
+        if (Firebase.auth.currentUser != null) {
+            val matchObj = _matches.value.find { it.id == matchId }
+            val title = matchObj?.let { "${it.team1Name} vs ${it.team2Name}" } ?: matchId
+            repoScope.launch {
+                if (added) {
+                    cloudSyncRepository.addFavorite(matchId, "match", title)
+                } else {
+                    cloudSyncRepository.removeFavorite("match_$matchId")
+                }
+            }
+        }
     }
 
     // Channel Operations
@@ -317,23 +500,279 @@ class SportsStreamRepository(
         }
         _channels.value = current
         saveData()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                cloudSyncRepository.upsertPublicCatalogItem(
+                    rawItemId = channel.id,
+                    itemType = "channel",
+                    title = channel.name,
+                    payloadJson = serializeSingleChannel(channel).toString()
+                )
+            }
+        }
     }
 
     fun deleteChannel(channelId: String) {
         _channels.value = _channels.value.filter { it.id != channelId }
         saveData()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                cloudSyncRepository.deletePublicCatalogItem(channelId, "channel")
+            }
+        }
     }
 
     fun toggleChannelFavorite(channelId: String) {
+        var isNowFav = false
+        var chTitle = channelId
         _channels.value = _channels.value.map {
-            if (it.id == channelId) it.copy(isFavorite = !it.isFavorite) else it
+            if (it.id == channelId) {
+                isNowFav = !it.isFavorite
+                chTitle = it.name
+                it.copy(isFavorite = isNowFav)
+            } else {
+                it
+            }
         }
+        if (isNowFav) favoriteChannelIds.add(channelId) else favoriteChannelIds.remove(channelId)
         saveData()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                if (isNowFav) {
+                    cloudSyncRepository.addFavorite(channelId, "channel", chTitle)
+                } else {
+                    cloudSyncRepository.removeFavorite("channel_$channelId")
+                }
+            }
+        }
     }
 
     fun updateConfig(newConfig: AppConfig) {
         _config.value = newConfig
         saveData()
+
+        if (Firebase.auth.currentUser != null) {
+            repoScope.launch {
+                val configObj = JSONObject().apply {
+                    put("appTitle", newConfig.appTitle)
+                    put("version", newConfig.version)
+                    put("announcement", newConfig.announcement)
+                    put("telegramLink", newConfig.telegramLink)
+                    put("adminPin", newConfig.adminPin)
+                    put("remoteFeedUrl", newConfig.remoteFeedUrl)
+                    put("autoSyncOnLaunch", newConfig.autoSyncOnLaunch)
+                }
+                cloudSyncRepository.upsertPublicCatalogItem(
+                    rawItemId = "global_app_config",
+                    itemType = "config",
+                    title = newConfig.appTitle,
+                    payloadJson = configObj.toString()
+                )
+            }
+        }
+    }
+
+    /**
+     * Pushes all current Admin Panel matches (with custom streams), channels, and global config
+     * to the Firebase Firestore Cloud Server so all connected users receive them immediately.
+     */
+    suspend fun pushAllToCloudServer(): Result<Int> = withContext(Dispatchers.IO) {
+        if (Firebase.auth.currentUser == null) {
+            return@withContext Result.failure(IllegalStateException("Google Sign-In required to push to Cloud Server"))
+        }
+        var pushedCount = 0
+        try {
+            val cfg = _config.value
+            val configObj = JSONObject().apply {
+                put("appTitle", cfg.appTitle)
+                put("version", cfg.version)
+                put("announcement", cfg.announcement)
+                put("telegramLink", cfg.telegramLink)
+                put("adminPin", cfg.adminPin)
+                put("remoteFeedUrl", cfg.remoteFeedUrl)
+                put("autoSyncOnLaunch", cfg.autoSyncOnLaunch)
+            }
+            cloudSyncRepository.upsertPublicCatalogItem(
+                rawItemId = "global_app_config",
+                itemType = "config",
+                title = cfg.appTitle,
+                payloadJson = configObj.toString()
+            ).getOrThrow()
+            pushedCount++
+
+            for (ch in _channels.value) {
+                cloudSyncRepository.upsertPublicCatalogItem(
+                    rawItemId = ch.id,
+                    itemType = "channel",
+                    title = ch.name,
+                    payloadJson = serializeSingleChannel(ch).toString()
+                ).getOrThrow()
+                pushedCount++
+            }
+
+            for (m in _matches.value) {
+                if (m.streams.isNotEmpty() || m.id in cloudMatchOverrides) {
+                    cloudSyncRepository.upsertPublicCatalogItem(
+                        rawItemId = m.id,
+                        itemType = "match",
+                        title = "${m.team1Name} vs ${m.team2Name}",
+                        payloadJson = serializeSingleMatch(m).toString()
+                    ).getOrThrow()
+                    pushedCount++
+                }
+            }
+
+            _cloudSyncStatus.value = "Synced $pushedCount items to Cloud Server"
+            Result.success(pushedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun serializeSingleMatch(m: LiveMatch): JSONObject {
+        return JSONObject().apply {
+            put("id", m.id)
+            put("tournament", m.tournament)
+            put("sport", m.sport.name)
+            put("status", m.status.name)
+            put("matchTime", m.matchTime)
+            put("timeOrScore", m.timeOrScore)
+            put("team1Name", m.team1Name)
+            put("team1Code", m.team1Code)
+            put("team1FlagUrl", m.team1FlagUrl)
+            put("team2Name", m.team2Name)
+            put("team2Code", m.team2Code)
+            put("team2FlagUrl", m.team2FlagUrl)
+            val streamsArr = JSONArray()
+            for (s in m.streams) {
+                val so = JSONObject().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("quality", s.quality)
+                    put("url", s.url)
+                    put("isDefault", s.isDefault)
+                    if (!s.userAgent.isNullOrBlank()) put("userAgent", s.userAgent)
+                    if (!s.referer.isNullOrBlank()) put("referer", s.referer)
+                }
+                streamsArr.put(so)
+            }
+            put("streams", streamsArr)
+        }
+    }
+
+    private fun deserializeSingleMatch(obj: JSONObject): LiveMatch {
+        val streamList = mutableListOf<StreamSource>()
+        val streamArr = obj.optJSONArray("streams")
+        if (streamArr != null) {
+            for (j in 0 until streamArr.length()) {
+                val sObj = streamArr.getJSONObject(j)
+                val sUrl = sObj.optString("url")
+                if (sUrl.isNotBlank()) {
+                    streamList.add(
+                        StreamSource(
+                            id = sObj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                            name = sObj.optString("name", "Server ${j + 1}"),
+                            quality = sObj.optString("quality", "1080p FHD"),
+                            url = sUrl,
+                            userAgent = sObj.optString("userAgent").ifBlank { null },
+                            referer = sObj.optString("referer").ifBlank { null },
+                            isDefault = sObj.optBoolean("isDefault", j == 0)
+                        )
+                    )
+                }
+            }
+        }
+        val sportStr = obj.optString("sport", "CRICKET").uppercase()
+        val sport = try {
+            SportType.valueOf(sportStr)
+        } catch (_: Exception) {
+            SportType.CRICKET
+        }
+        val statusStr = obj.optString("status", "LIVE").uppercase()
+        val status = try {
+            MatchStatus.valueOf(statusStr)
+        } catch (_: Exception) {
+            MatchStatus.LIVE
+        }
+        val t1Name = obj.optString("team1Name").ifBlank { obj.optString("team1", "Team 1") }
+        val t2Name = obj.optString("team2Name").ifBlank { obj.optString("team2", "Team 2") }
+        return LiveMatch(
+            id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+            tournament = obj.optString("tournament", "LIVE MATCH"),
+            sport = sport,
+            status = status,
+            matchTime = obj.optString("matchTime").ifBlank { obj.optString("time", "Live") },
+            timeOrScore = obj.optString("timeOrScore").ifBlank { obj.optString("score", "") },
+            team1Name = t1Name,
+            team1Code = obj.optString("team1Code").ifBlank { t1Name.take(3).uppercase() },
+            team1FlagUrl = obj.optString("team1FlagUrl").ifBlank { obj.optString("team1Flag", "") },
+            team2Name = t2Name,
+            team2Code = obj.optString("team2Code").ifBlank { t2Name.take(3).uppercase() },
+            team2FlagUrl = obj.optString("team2FlagUrl").ifBlank { obj.optString("team2Flag", "") },
+            streams = streamList
+        )
+    }
+
+    private fun serializeSingleChannel(c: SportsChannel): JSONObject {
+        return JSONObject().apply {
+            put("id", c.id)
+            put("name", c.name)
+            put("category", c.category)
+            put("logoText", c.logoText)
+            put("logoUrl", c.logoUrl)
+            put("isFavorite", c.isFavorite)
+            val streamArr = JSONArray()
+            for (s in c.streams) {
+                val sObj = JSONObject().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("quality", s.quality)
+                    put("url", s.url)
+                    put("isDefault", s.isDefault)
+                    if (!s.userAgent.isNullOrBlank()) put("userAgent", s.userAgent)
+                    if (!s.referer.isNullOrBlank()) put("referer", s.referer)
+                }
+                streamArr.put(sObj)
+            }
+            put("streams", streamArr)
+        }
+    }
+
+    private fun deserializeSingleChannel(obj: JSONObject): SportsChannel {
+        val streamList = mutableListOf<StreamSource>()
+        val streamArr = obj.optJSONArray("streams") ?: obj.optJSONArray("servers")
+        if (streamArr != null) {
+            for (j in 0 until streamArr.length()) {
+                val sObj = streamArr.getJSONObject(j)
+                val sUrl = sObj.optString("url").ifBlank { sObj.optString("link").ifBlank { sObj.optString("stream") } }
+                if (sUrl.isNotBlank()) {
+                    streamList.add(
+                        StreamSource(
+                            id = sObj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                            name = sObj.optString("name", "Stream ${j + 1}"),
+                            quality = sObj.optString("quality", "FHD"),
+                            url = sUrl,
+                            userAgent = sObj.optString("userAgent").ifBlank { null },
+                            referer = sObj.optString("referer").ifBlank { null },
+                            isDefault = sObj.optBoolean("isDefault", j == 0)
+                        )
+                    )
+                }
+            }
+        }
+        val cName = obj.optString("name").ifBlank { obj.optString("title", "Sports Channel") }
+        return SportsChannel(
+            id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+            name = cName,
+            category = obj.optString("category", "Sports"),
+            logoText = obj.optString("logoText").ifBlank { cName.take(3).uppercase() },
+            logoUrl = obj.optString("logoUrl", ""),
+            streams = streamList,
+            isFavorite = obj.optBoolean("isFavorite", false)
+        )
     }
 
     fun resetToDefaults() {

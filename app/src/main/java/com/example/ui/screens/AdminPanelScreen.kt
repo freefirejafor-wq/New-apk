@@ -54,6 +54,7 @@ fun AdminPanelScreen(
     val matches by repository.matches.collectAsState()
     val channels by repository.channels.collectAsState()
     val config by repository.config.collectAsState()
+    val cloudSyncStatus by repository.cloudSyncStatus.collectAsState()
 
     var selectedTab by remember { mutableStateOf(AdminTab.M3U8_CHECKER) }
 
@@ -190,9 +191,11 @@ fun AdminPanelScreen(
                 AdminTab.SETTINGS -> {
                     AppSettingsTab(
                         config = config,
+                        cloudSyncStatus = cloudSyncStatus,
                         onUpdateConfig = { repository.updateConfig(it) },
                         onResetDefaults = { repository.resetToDefaults() },
                         onSyncRemote = { repository.syncFromRemoteFeed(it) },
+                        onPushAllToCloud = { repository.pushAllToCloudServer() },
                         onExportDataJson = { repository.exportCurrentDataAsJson() }
                     )
                 }
@@ -789,9 +792,11 @@ fun MatchesManagerTab(
 @Composable
 fun AppSettingsTab(
     config: AppConfig,
+    cloudSyncStatus: String = "Connected to Real-Time Cloud Server",
     onUpdateConfig: (AppConfig) -> Unit,
     onResetDefaults: () -> Unit,
     onSyncRemote: suspend (String) -> Result<Int>,
+    onPushAllToCloud: (suspend () -> Result<Int>)? = null,
     onExportDataJson: (() -> String)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -802,6 +807,8 @@ fun AppSettingsTab(
     var remoteFeedUrl by remember(config.remoteFeedUrl) { mutableStateOf(config.remoteFeedUrl) }
     var isSyncingRemote by remember { mutableStateOf(false) }
     var syncStatusMessage by remember { mutableStateOf<String?>(null) }
+    var isPushingCloud by remember { mutableStateOf(false) }
+    var cloudPushMessage by remember { mutableStateOf<String?>(null) }
     var showResetConfirm by remember { mutableStateOf(false) }
     var autoSyncOnLaunch by remember(config.autoSyncOnLaunch) { mutableStateOf(config.autoSyncOnLaunch) }
     var showSampleJsonModal by remember { mutableStateOf(false) }
@@ -817,6 +824,108 @@ fun AppSettingsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.2.dp, LiveGreen.copy(alpha = 0.6f), RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavySurface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.CloudDone,
+                                contentDescription = null,
+                                tint = LiveGreen,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Real-Time Cloud Server (Firestore)",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "অ্যাডমিন প্যানেল বা ওয়েব কনসোল (Firebase Console -> cloud_items) থেকে যেকোনো ম্যাচ, চ্যানেল বা স্ট্রিম পরিবর্তন করলে সকল ইউজারের অ্যাপে অটোমেটিক রিয়েল-টাইম আপডেট চলে যাবে।",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Status: $cloudSyncStatus",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = LiveGreen,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            isPushingCloud = true
+                            cloudPushMessage = null
+                            coroutineScope.launch {
+                                val res = onPushAllToCloud?.invoke()
+                                isPushingCloud = false
+                                cloudPushMessage = res?.fold(
+                                    onSuccess = { "✓ Successfully published $it items to Cloud Server for all users!" },
+                                    onFailure = { "Cloud sync error: ${it.localizedMessage}" }
+                                )
+                            }
+                        },
+                        enabled = !isPushingCloud,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("admin_push_cloud_server_btn"),
+                        colors = ButtonDefaults.buttonColors(containerColor = LiveGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        if (isPushingCloud) {
+                            CircularProgressIndicator(
+                                color = Color.Black,
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Publishing to Cloud Server...", color = Color.Black, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.Black)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Push All Matches & Channels to Cloud Server", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    cloudPushMessage?.let { msg ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = if (msg.startsWith("✓")) LiveGreen else LiveRed,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Card(
                 modifier = Modifier

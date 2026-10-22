@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "UserFavorite": {
+      "title": "UserFavorite",
+      "description": "A user-pinned favorite match or channel synced across devices.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the authenticated owner."
+        },
+        "itemId": {
+          "type": "string",
+          "description": "ID of the favorited match or channel."
+        },
+        "itemType": {
+          "type": "string",
+          "enum": ["match", "channel"],
+          "description": "Type of favorited item."
+        },
+        "title": {
+          "type": "string",
+          "description": "Display title of the match or channel."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when favorite was added via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when favorite was last updated via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "itemId", "itemType", "title", "createdAt", "updatedAt"]
+    },
+    "CloudCatalogItem": {
+      "title": "CloudCatalogItem",
+      "description": "A cloud-synced broadcast match, stream override, channel, or global app config entry.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the admin/author who created the cloud entry."
+        },
+        "itemType": {
+          "type": "string",
+          "enum": ["match", "channel", "config"],
+          "description": "Category of the cloud broadcast entity."
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public", "private"],
+          "description": "Access visibility; 'public' items are broadcast to all authenticated users."
+        },
+        "title": {
+          "type": "string",
+          "description": "Display title of the match, channel, or config."
+        },
+        "payloadJson": {
+          "type": "string",
+          "description": "Serialized configuration/streams payload for real-time sync."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["ownerId", "itemType", "visibility", "title", "payloadJson", "createdAt", "updatedAt"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Read-only admin registry document managed via console.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "description": "Admin role marker."
+        }
+      },
+      "required": ["role"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/favorites/{favId}": {
+      "schema": { "$ref": "#/entities/UserFavorite" },
+      "description": "Per-user synced favorite matches and channels."
+    },
+    "/cloud_items/{itemId}": {
+      "schema": { "$ref": "#/entities/CloudCatalogItem" },
+      "description": "Cloud-controlled live matches, channels, and app configuration."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Trusted admin UID registry."
+    }
+  }
+}

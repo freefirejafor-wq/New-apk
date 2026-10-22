@@ -31,6 +31,7 @@ import com.example.ui.theme.*
 @Composable
 fun MenuScreen(
     config: AppConfig,
+    userEmail: String? = null,
     onNetworkStreamClick: () -> Unit,
     onPlaylistsClick: () -> Unit,
     onHighlightsClick: () -> Unit,
@@ -38,7 +39,8 @@ fun MenuScreen(
     onFootballScoreClick: () -> Unit,
     onFloatingPlayerClick: () -> Unit,
     onForceLowQualityToggle: (Boolean) -> Unit,
-    onAdminPanelClick: () -> Unit
+    onAdminPanelClick: () -> Unit,
+    onSignOutClick: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -300,6 +302,15 @@ fun MenuScreen(
                         modifier = Modifier.size(16.dp)
                     )
                 }
+            }
+
+            if (!userEmail.isNullOrBlank() && onSignOutClick != null) {
+                MenuItemCard(
+                    icon = Icons.Default.AccountCircle,
+                    title = "Cloud Account ($userEmail)",
+                    subtitle = "Tap to sign out of Google Cloud Sync",
+                    onClick = onSignOutClick
+                )
             }
         }
 
