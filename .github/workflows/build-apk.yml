@@ -49,43 +49,7 @@ jobs:
             LOGO_SRC="/tmp/sports_live_logo.jpg"
           fi
           if [ -f "$LOGO_SRC" ]; then
-            cat << 'EOF' > /tmp/GenIcons.java
-            import java.awt.*;
-            import java.awt.image.BufferedImage;
-            import java.io.File;
-            import javax.imageio.ImageIO;
-
-            public class GenIcons {
-                public static void main(String[] args) throws Exception {
-                    BufferedImage src = ImageIO.read(new File(args[0]));
-                    writeResized(src, 512, 512, 0, "app/src/main/res/drawable/ic_app_logo.png");
-                    writeResized(src, 432, 432, 68, "app/src/main/res/drawable/ic_launcher_foreground.png");
-                    int[] sizes = {48, 72, 96, 144, 192};
-                    String[] dirs = {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"};
-                    for (int i = 0; i < sizes.length; i++) {
-                        String dir = "app/src/main/res/mipmap-" + dirs[i];
-                        new File(dir).mkdirs();
-                        writeResized(src, sizes[i], sizes[i], 0, dir + "/ic_launcher.png");
-                        writeResized(src, sizes[i], sizes[i], 0, dir + "/ic_launcher_round.png");
-                    }
-                }
-
-                static void writeResized(BufferedImage src, int w, int h, int pad, String outPath) throws Exception {
-                    File outFile = new File(outPath);
-                    outFile.getParentFile().mkdirs();
-                    BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-                    Graphics2D g = dst.createGraphics();
-                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                    g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g.setColor(Color.WHITE);
-                    g.fillRect(0, 0, w, h);
-                    g.drawImage(src, pad, pad, w - 2 * pad, h - 2 * pad, null);
-                    g.dispose();
-                    ImageIO.write(dst, "PNG", outFile);
-                }
-            }
-            EOF
+            echo 'import java.awt.*; import java.awt.image.BufferedImage; import java.io.File; import javax.imageio.ImageIO; public class GenIcons { public static void main(String[] a) throws Exception { BufferedImage s = ImageIO.read(new File(a[0])); w(s,512,512,0,"app/src/main/res/drawable/ic_app_logo.png"); w(s,432,432,68,"app/src/main/res/drawable/ic_launcher_foreground.png"); int[] z={48,72,96,144,192}; String[] d={"mdpi","hdpi","xhdpi","xxhdpi","xxxhdpi"}; for(int i=0;i<5;i++){ String p="app/src/main/res/mipmap-"+d[i]; new File(p).mkdirs(); w(s,z[i],z[i],0,p+"/ic_launcher.png"); w(s,z[i],z[i],0,p+"/ic_launcher_round.png"); } } static void w(BufferedImage s,int w,int h,int p,String o) throws Exception { File f=new File(o); f.getParentFile().mkdirs(); BufferedImage b=new BufferedImage(w,h,2); Graphics2D g=b.createGraphics(); g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BILINEAR); g.setColor(Color.WHITE); g.fillRect(0,0,w,h); g.drawImage(s,p,p,w-2*p,h-2*p,null); g.dispose(); ImageIO.write(b,"PNG",f); } }' > /tmp/GenIcons.java
             java -Djava.awt.headless=true /tmp/GenIcons.java "$LOGO_SRC"
             rm -f /tmp/GenIcons.java
           fi
