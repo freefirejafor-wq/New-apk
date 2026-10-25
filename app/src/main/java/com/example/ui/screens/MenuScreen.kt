@@ -220,6 +220,13 @@ fun MenuScreen(
                     )
                 }
             }
+
+            MenuItemCard(
+                icon = Icons.Default.AdminPanelSettings,
+                title = "Admin Control Panel",
+                subtitle = "Manage live streams, matches, channels & M3U8 checker",
+                onClick = onAdminPanelClick
+            )
         }
 
         Spacer(modifier = Modifier.height(28.dp))

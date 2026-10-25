@@ -26,7 +26,7 @@ class ExampleRobolectricTest {
     fun `read string from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("SportzX Live TV", appName)
+        assertEquals("Sports Live", appName)
     }
 
     @Test
@@ -37,13 +37,12 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `repository loads default football matches and updates cricket from CREX`() {
+    fun `repository starts without hardcoded demo fixtures and preserves unmatched stream associations`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
         val matches = repository.matches.value
-        assertTrue("Matches should contain football matches initially", matches.isNotEmpty())
-        assertTrue("Cricket matches come only from CREX", matches.none { it.sport == SportType.CRICKET })
+        assertTrue("Active match list should not contain old hardcoded demo matches (m1..m8)", matches.none { it.id in setOf("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8") })
     }
 
     @Test

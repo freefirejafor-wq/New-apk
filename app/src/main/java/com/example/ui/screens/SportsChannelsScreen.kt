@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -12,7 +14,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
@@ -41,6 +46,8 @@ fun SportsChannelsScreen(
     onFavoriteToggle: (String) -> Unit,
     searchQuery: String = ""
 ) {
+    var isGridView by remember { mutableStateOf(true) }
+
     val distinctCategories = remember(channels) {
         listOf("All") + channels.map { it.category }.filter { it.isNotBlank() }.distinct()
     }
@@ -65,12 +72,17 @@ fun SportsChannelsScreen(
             .background(NavyDark)
             .padding(horizontal = 12.dp)
     ) {
-        if (distinctCategories.size > 1) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 distinctCategories.forEach { cat ->
@@ -100,6 +112,26 @@ fun SportsChannelsScreen(
                         )
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Grid vs List View Toggle Button
+            IconButton(
+                onClick = { isGridView = !isGridView },
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(NavySurface)
+                    .border(1.dp, NavyBorder, RoundedCornerShape(10.dp))
+                    .testTag("toggle_channel_view_mode")
+            ) {
+                Icon(
+                    imageVector = if (isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                    contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
+                    tint = CyanAccent,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 
@@ -135,7 +167,7 @@ fun SportsChannelsScreen(
                     }
                 }
             }
-        } else {
+        } else if (isGridView) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 modifier = Modifier.fillMaxSize(),
@@ -150,6 +182,125 @@ fun SportsChannelsScreen(
                         onFavoriteToggle = { onFavoriteToggle(channel.id) }
                     )
                 }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 80.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(filteredChannels, key = { it.id }) { channel ->
+                    SportsChannelListItem(
+                        channel = channel,
+                        onClick = { onChannelClick(channel) },
+                        onFavoriteToggle = { onFavoriteToggle(channel.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SportsChannelListItem(
+    channel: SportsChannel,
+    onClick: () -> Unit,
+    onFavoriteToggle: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .border(1.dp, NavyBorder, RoundedCornerShape(12.dp))
+            .testTag("channel_list_item_${channel.name.lowercase().replace(" ", "_")}"),
+        colors = CardDefaults.cardColors(containerColor = NavySurface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(1.5.dp, NavyBorder, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val logoUrl = channel.logoUrl.trim()
+                    if (logoUrl.startsWith("http://", ignoreCase = true) || logoUrl.startsWith("https://", ignoreCase = true)) {
+                        AsyncImage(
+                            model = logoUrl,
+                            contentDescription = channel.name,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(6.dp)
+                                .clip(CircleShape)
+                        )
+                    } else {
+                        val text = if (channel.logoText.isNotBlank()) channel.logoText else channel.name.take(4)
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = Color(0xFF0F172A),
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column {
+                    Text(
+                        text = channel.name,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${channel.category} • ${channel.streams.size} HD Servers",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = CyanAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onFavoriteToggle, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        imageVector = if (channel.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+                        contentDescription = "Favorite",
+                        tint = if (channel.isFavorite) GoldYellow else TextTertiary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.PlayCircle,
+                    contentDescription = "Play",
+                    tint = CyanAccent,
+                    modifier = Modifier.size(26.dp)
+                )
             }
         }
     }

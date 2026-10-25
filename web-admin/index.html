@@ -10,13 +10,14 @@
       --card: #131b2a;
       --border: #243247;
       --cyan: #00d1c1;
+      --gold: #f59e0b;
       --red: #e53935;
       --green: #10b981;
       --text: #ffffff;
       --muted: #94a3b8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-    body { background: var(--bg); color: var(--text); padding: 20px; max-width: 960px; margin: 0 auto; }
+    body { background: var(--bg); color: var(--text); padding: 20px; max-width: 1040px; margin: 0 auto; }
     header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
     h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
     .badge { background: var(--cyan); color: #000; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; }
@@ -28,14 +29,16 @@
     label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
     input, select, textarea { width: 100%; background: #0b111e; border: 1px solid var(--border); color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
     button.primary { background: var(--cyan); color: #000; border: none; padding: 11px 18px; border-radius: 10px; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #1e293b; color: var(--cyan); border: 1px solid var(--cyan); padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }
     button.danger { background: var(--red); color: #fff; border: none; padding: 7px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; }
     .item-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; gap: 10px; flex-wrap: wrap; }
+    .stream-box { border: 1px dashed var(--border); border-radius: 10px; padding: 12px; margin-top: 10px; background: rgba(11,17,30,0.55); }
     .status-bar { font-size: 13px; color: var(--green); margin-bottom: 14px; font-weight: 600; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Sports Live <span class="badge">WEBSITE ADMIN PANEL</span></h1>
+    <h1>Sports Live <span class="badge">WEBSITE ADMIN PANEL v2.0</span></h1>
     <div id="authArea">
       <button class="primary" id="loginBtn">Sign in with Google (Admin)</button>
     </div>
@@ -45,19 +48,20 @@
 
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('matches')">Live & Upcoming Matches</button>
-    <button class="tab-btn" onclick="switchTab('channels')">Channels & Streams</button>
+    <button class="tab-btn" onclick="switchTab('channels')">Channels & Multi-Streams</button>
+    <button class="tab-btn" onclick="switchTab('highlights')">Match Highlights</button>
     <button class="tab-btn" onclick="switchTab('settings')">App Broadcast Settings</button>
   </div>
 
   <!-- TAB 1: MATCHES -->
   <div id="tab-matches">
     <div class="card">
-      <h3>Add / Update Match Card (লিভ বা আপকামিং ম্যাচ যোগ করুন)</h3>
-      <p style="font-size:12px;color:var(--muted);margin-top:4px;">কার্ডের মধ্যে শুধুমাত্র দুটি দলের পতাকা, নাম, টুর্নামেন্ট ও টাইমার দেখাবে।</p>
+      <h3>Add / Update Match Card (লিভ বা আপকামিং ম্যাচ ও মাল্টি-সার্ভার স্ট্রিম যোগ করুন)</h3>
+      <p style="font-size:12px;color:var(--muted);margin-top:4px;">জাতীয় বা ক্লাব দলের কোড দিলে অ্যাপ অটোমেটিক পতাকা (Flag) বসিয়ে নেবে অথবা কাস্টম পতাকা লিংক দিতে পারেন।</p>
       <div class="form-grid">
         <div>
           <label>Match ID (Unique)</label>
-          <input id="m_id" placeholder="e.g. cric-t20-nz-ind" />
+          <input id="m_id" placeholder="e.g. cric-t20-ban-ind" />
         </div>
         <div>
           <label>Sport Category</label>
@@ -70,7 +74,7 @@
         </div>
         <div>
           <label>Tournament Title</label>
-          <input id="m_tournament" placeholder="CRICKET | T20 INTERNATIONAL" />
+          <input id="m_tournament" placeholder="CRICKET | ICC T20 SERIES" />
         </div>
         <div>
           <label>Match Status</label>
@@ -81,39 +85,56 @@
           </select>
         </div>
         <div>
-          <label>Team 1 Name / Code (যেমন: NZ)</label>
-          <input id="m_t1code" placeholder="NZ" />
+          <label>Team 1 Full Name (যেমন: Bangladesh)</label>
+          <input id="m_t1name" placeholder="Bangladesh" />
         </div>
         <div>
-          <label>Team 1 Flag URL</label>
-          <input id="m_t1flag" placeholder="https://flagcdn.com/w160/nz.png" />
+          <label>Team 1 Code (যেমন: BAN)</label>
+          <input id="m_t1code" placeholder="BAN" />
         </div>
         <div>
-          <label>Team 2 Name / Code (যেমন: IND)</label>
+          <label>Team 1 Score (Optional, e.g. 168/4)</label>
+          <input id="m_t1score" placeholder="168/4 (18.2)" />
+        </div>
+        <div>
+          <label>Team 1 Flag URL (Optional - Auto Resolved)</label>
+          <input id="m_t1flag" placeholder="https://flagcdn.com/w160/bd.png" />
+        </div>
+        <div>
+          <label>Team 2 Full Name (যেমন: India)</label>
+          <input id="m_t2name" placeholder="India" />
+        </div>
+        <div>
+          <label>Team 2 Code (যেমন: IND)</label>
           <input id="m_t2code" placeholder="IND" />
         </div>
         <div>
-          <label>Team 2 Flag URL</label>
+          <label>Team 2 Score (Optional, e.g. 142/6)</label>
+          <input id="m_t2score" placeholder="142/6 (16.0)" />
+        </div>
+        <div>
+          <label>Team 2 Flag URL (Optional - Auto Resolved)</label>
           <input id="m_t2flag" placeholder="https://flagcdn.com/w160/in.png" />
         </div>
         <div>
-          <label>Upcoming Time & Date (যেমন: 07:40 PM | 22/10/2026)</label>
-          <input id="m_time" placeholder="07:40 PM | 22/10/2026" />
+          <label>Schedule Time & Date (যেমন: 25 Oct 2026, 07:30 PM BST)</label>
+          <input id="m_time" placeholder="25 Oct 2026, 07:30 PM BST" />
         </div>
         <div>
-          <label>Bottom Timer / Countdown (যেমন: 01:56:40 বা Starts in 4 hours)</label>
-          <input id="m_timer" placeholder="01:56:40" />
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label>Stream Server 1 M3U8 / MP4 Link</label>
-          <input id="m_stream1" placeholder="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" />
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label>Stream Server 2 M3U8 / MP4 Link (Optional)</label>
-          <input id="m_stream2" placeholder="https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8" />
+          <label>Live Score / Status Summary</label>
+          <input id="m_timer" placeholder="BAN need 18 runs in 12 balls" />
         </div>
       </div>
-      <div style="margin-top:14px;">
+
+      <div style="margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label style="font-weight:700;color:var(--cyan);">Multiple Stream Servers (M3U8 / HLS / MP4 + Custom Referer/UA)</label>
+          <button type="button" class="secondary" onclick="addMatchStreamRow()">+ Add Server</button>
+        </div>
+        <div id="matchStreamsContainer"></div>
+      </div>
+
+      <div style="margin-top:16px;">
         <button class="primary" onclick="saveMatch()">Publish Match to App Now</button>
       </div>
     </div>
@@ -127,7 +148,7 @@
   <!-- TAB 2: CHANNELS -->
   <div id="tab-channels" style="display:none;">
     <div class="card">
-      <h3>Add / Update Live TV Channel</h3>
+      <h3>Add / Update Live TV Channel (একাধিক সার্ভারসহ টিভি চ্যানেল)</h3>
       <div class="form-grid">
         <div>
           <label>Channel ID</label>
@@ -139,17 +160,22 @@
         </div>
         <div>
           <label>Category</label>
-          <input id="c_cat" placeholder="Bangla Sports" />
+          <input id="c_cat" placeholder="Cricket & Football" />
         </div>
         <div>
           <label>Logo URL (Optional)</label>
           <input id="c_logo" placeholder="https://..." />
         </div>
-        <div style="grid-column: 1 / -1;">
-          <label>Stream M3U8 Link</label>
-          <input id="c_url" placeholder="https://..." />
-        </div>
       </div>
+
+      <div style="margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label style="font-weight:700;color:var(--cyan);">Channel Stream Servers</label>
+          <button type="button" class="secondary" onclick="addChannelStreamRow()">+ Add Server</button>
+        </div>
+        <div id="channelStreamsContainer"></div>
+      </div>
+
       <div style="margin-top:14px;">
         <button class="primary" onclick="saveChannel()">Publish Channel to App Now</button>
       </div>
@@ -161,7 +187,51 @@
     </div>
   </div>
 
-  <!-- TAB 3: SETTINGS -->
+  <!-- TAB 3: HIGHLIGHTS -->
+  <div id="tab-highlights" style="display:none;">
+    <div class="card">
+      <h3>Add Match Highlight Video</h3>
+      <div class="form-grid">
+        <div>
+          <label>Highlight ID</label>
+          <input id="h_id" placeholder="hl-ban-vs-ind" />
+        </div>
+        <div>
+          <label>Highlight Title</label>
+          <input id="h_title" placeholder="Bangladesh vs India Full Match Highlights" />
+        </div>
+        <div>
+          <label>Tournament</label>
+          <input id="h_tournament" placeholder="ICC T20 Series" />
+        </div>
+        <div>
+          <label>Duration</label>
+          <input id="h_duration" placeholder="12:40" />
+        </div>
+        <div>
+          <label>Sport</label>
+          <select id="h_sport">
+            <option value="CRICKET">CRICKET</option>
+            <option value="FOOTBALL">FOOTBALL</option>
+          </select>
+        </div>
+        <div style="grid-column: 1 / -1;">
+          <label>Video Stream URL (.m3u8 or .mp4)</label>
+          <input id="h_url" placeholder="https://..." />
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <button class="primary" onclick="saveHighlight()">Publish Highlight</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Active Highlights (<span id="highlightCount">0</span>)</h3>
+      <div id="highlightsList"></div>
+    </div>
+  </div>
+
+  <!-- TAB 4: SETTINGS -->
   <div id="tab-settings" style="display:none;">
     <div class="card">
       <h3>Global App Broadcast Settings</h3>
@@ -176,7 +246,7 @@
         </div>
         <div style="grid-column: 1 / -1;">
           <label>Announcement Banner Message</label>
-          <input id="s_announce" value="Welcome to Sports Live!" />
+          <input id="s_announce" value="Welcome to Sports Live! Watch Real-Time Cricket & Football in FHD." />
         </div>
       </div>
       <div style="margin-top:14px;">
@@ -202,6 +272,44 @@
 
     let currentUser = null;
     const createdAtMap = {};
+    let cachedMatches = [];
+    let cachedChannels = [];
+
+    window.addMatchStreamRow = (data = {}) => {
+      const container = document.getElementById("matchStreamsContainer");
+      const div = document.createElement("div");
+      div.className = "stream-box match-stream-row";
+      div.innerHTML = `
+        <div class="form-grid" style="margin-top:0;">
+          <div><label>Server Name</label><input class="s_name" value="${data.name || 'Server 1 (FHD)'}" /></div>
+          <div><label>Quality</label><select class="s_quality"><option value="FHD" ${data.quality==='FHD'?'selected':''}>FHD</option><option value="HD" ${data.quality==='HD'?'selected':''}>HD</option><option value="SD" ${data.quality==='SD'?'selected':''}>SD</option></select></div>
+          <div style="grid-column: 1 / -1;"><label>Stream URL (.m3u8 / .mp4)</label><input class="s_url" value="${data.url || ''}" placeholder="https://example.com/live.m3u8" /></div>
+          <div><label>HTTP Referer / Origin (Optional)</label><input class="s_ref" value="${data.referer || ''}" placeholder="https://..." /></div>
+          <div><label>Custom User-Agent (Optional)</label><input class="s_ua" value="${data.userAgent || ''}" placeholder="Mozilla/5.0..." /></div>
+        </div>
+      `;
+      container.appendChild(div);
+    };
+
+    window.addChannelStreamRow = (data = {}) => {
+      const container = document.getElementById("channelStreamsContainer");
+      const div = document.createElement("div");
+      div.className = "stream-box channel-stream-row";
+      div.innerHTML = `
+        <div class="form-grid" style="margin-top:0;">
+          <div><label>Server Name</label><input class="s_name" value="${data.name || 'Main HD'}" /></div>
+          <div><label>Quality</label><select class="s_quality"><option value="FHD">FHD</option><option value="HD">HD</option><option value="SD">SD</option></select></div>
+          <div style="grid-column: 1 / -1;"><label>Stream URL (.m3u8 / .mp4)</label><input class="s_url" value="${data.url || ''}" placeholder="https://example.com/channel.m3u8" /></div>
+          <div><label>HTTP Referer (Optional)</label><input class="s_ref" value="${data.referer || ''}" /></div>
+          <div><label>User-Agent (Optional)</label><input class="s_ua" value="${data.userAgent || ''}" /></div>
+        </div>
+      `;
+      container.appendChild(div);
+    };
+
+    // Add initial rows
+    window.addMatchStreamRow({ name: "Server 1 (FHD)", quality: "FHD" });
+    window.addChannelStreamRow({ name: "Server 1 (FHD)", quality: "FHD" });
 
     document.getElementById("loginBtn").onclick = async () => {
       const provider = new GoogleAuthProvider();
@@ -220,7 +328,7 @@
       } else {
         authArea.innerHTML = `<button class="primary" id="loginBtn">Sign in with Google (Admin)</button>`;
         document.getElementById("loginBtn").onclick = () => signInWithPopup(auth, new GoogleAuthProvider());
-        statusBar.textContent = "Please sign in with Google to manage live matches & channels.";
+        statusBar.textContent = "Please sign in with Google to manage live matches, channels & highlights.";
       }
     });
 
@@ -228,6 +336,7 @@
       onSnapshot(collection(db, "cloud_items"), (snap) => {
         const matches = [];
         const channels = [];
+        const highlights = [];
         snap.forEach((d) => {
           const data = d.data();
           createdAtMap[d.id] = data.createdAt;
@@ -236,10 +345,14 @@
             if (payload.deleted) return;
             if (data.itemType === "match") matches.push({ docId: d.id, ...payload });
             if (data.itemType === "channel") channels.push({ docId: d.id, ...payload });
+            if (data.itemType === "highlight") highlights.push({ docId: d.id, ...payload });
           } catch (_) {}
         });
+        cachedMatches = matches;
+        cachedChannels = channels;
         renderMatches(matches);
         renderChannels(channels);
+        renderHighlights(highlights);
       });
     }
 
@@ -249,11 +362,13 @@
       container.innerHTML = matches.map(m => `
         <div class="item-row">
           <div>
-            <strong>${m.tournament}</strong><br/>
-            <span style="font-size:13px;color:var(--cyan);">${m.team1Code} vs ${m.team2Code} • ${m.status} (${m.timeOrScore || m.matchTime})</span>
+            <strong>[${m.status}] ${m.team1Name || m.team1Code} vs ${m.team2Name || m.team2Code}</strong>
+            <div style="font-size:12px;color:var(--muted);">${m.tournament} • ${m.timeOrScore || m.matchTime} • ${(m.streams || []).length} Servers</div>
           </div>
-          <div style="display:flex;gap:8px;">
-            <button class="danger" onclick="window.removeMatch('${m.id}')">Delete</button>
+          <div style="display:flex;gap:6px;">
+            <button class="secondary" onclick="cycleMatchStatus('${m.id}')">Status ↻</button>
+            <button class="secondary" onclick="editMatch('${m.id}')">Edit</button>
+            <button class="danger" onclick="deleteItem('${m.docId}')">Delete</button>
           </div>
         </div>
       `).join("");
@@ -265,133 +380,216 @@
       container.innerHTML = channels.map(c => `
         <div class="item-row">
           <div>
-            <strong>${c.name}</strong> <span style="font-size:12px;color:var(--muted);">(${c.category})</span>
+            <strong>${c.name}</strong>
+            <div style="font-size:12px;color:var(--muted);">${c.category} • ${(c.streams || []).length} Stream Servers</div>
           </div>
-          <button class="danger" onclick="window.removeChannel('${c.id}')">Delete</button>
+          <div style="display:flex;gap:6px;">
+            <button class="danger" onclick="deleteItem('${c.docId}')">Delete</button>
+          </div>
         </div>
       `).join("");
     }
 
+    function renderHighlights(highlights) {
+      document.getElementById("highlightCount").textContent = highlights.length;
+      const container = document.getElementById("highlightsList");
+      container.innerHTML = highlights.map(h => `
+        <div class="item-row">
+          <div>
+            <strong>${h.title}</strong>
+            <div style="font-size:12px;color:var(--muted);">${h.tournament} • ${h.duration} (${h.sport})</div>
+          </div>
+          <button class="danger" onclick="deleteItem('${h.docId}')">Delete</button>
+        </div>
+      `).join("");
+    }
+
+    window.editMatch = (id) => {
+      const m = cachedMatches.find(x => x.id === id);
+      if (!m) return;
+      document.getElementById("m_id").value = m.id || "";
+      document.getElementById("m_sport").value = m.sport || "CRICKET";
+      document.getElementById("m_tournament").value = m.tournament || "";
+      document.getElementById("m_status").value = m.status || "LIVE";
+      document.getElementById("m_t1name").value = m.team1Name || "";
+      document.getElementById("m_t1code").value = m.team1Code || "";
+      document.getElementById("m_t1score").value = m.team1Score || "";
+      document.getElementById("m_t1flag").value = m.team1FlagUrl || "";
+      document.getElementById("m_t2name").value = m.team2Name || "";
+      document.getElementById("m_t2code").value = m.team2Code || "";
+      document.getElementById("m_t2score").value = m.team2Score || "";
+      document.getElementById("m_t2flag").value = m.team2FlagUrl || "";
+      document.getElementById("m_time").value = m.matchTime || "";
+      document.getElementById("m_timer").value = m.timeOrScore || "";
+      const container = document.getElementById("matchStreamsContainer");
+      container.innerHTML = "";
+      (m.streams || []).forEach(s => window.addMatchStreamRow(s));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    window.cycleMatchStatus = async (id) => {
+      if (!currentUser) return alert("Sign in first!");
+      const m = cachedMatches.find(x => x.id === id);
+      if (!m) return;
+      const next = m.status === "UPCOMING" ? "LIVE" : (m.status === "LIVE" ? "FINISHED" : "LIVE");
+      const updated = { ...m, status: next };
+      delete updated.docId;
+      const docId = `match_${id}`;
+      await setDoc(doc(db, "cloud_items", docId), {
+        itemType: "match",
+        payloadJson: JSON.stringify(updated),
+        authorUid: currentUser.uid,
+        createdAt: createdAtMap[docId] || serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    };
+
     window.saveMatch = async () => {
       if (!currentUser) return alert("Please sign in with Google first!");
-      const id = (document.getElementById("m_id").value.trim() || "match-" + Date.now()).replace(/[^a-zA-Z0-9_-]/g, "_");
-      const sport = document.getElementById("m_sport").value;
-      const tournament = document.getElementById("m_tournament").value.trim() || `${sport} | INTERNATIONAL`;
-      const status = document.getElementById("m_status").value;
-      const t1 = document.getElementById("m_t1code").value.trim() || "TEAM 1";
-      const t1flag = document.getElementById("m_t1flag").value.trim();
-      const t2 = document.getElementById("m_t2code").value.trim() || "TEAM 2";
-      const t2flag = document.getElementById("m_t2flag").value.trim();
-      const matchTime = document.getElementById("m_time").value.trim() || "07:40 PM | 22/10/2026";
-      const timeOrScore = document.getElementById("m_timer").value.trim() || (status === "LIVE" ? "01:00:00" : "Starts in 4 hours");
-      const s1 = document.getElementById("m_stream1").value.trim();
-      const s2 = document.getElementById("m_stream2").value.trim();
+      const id = document.getElementById("m_id").value.trim() || ("match-" + Date.now());
+      const t1code = document.getElementById("m_t1code").value.trim() || "T1";
+      const t2code = document.getElementById("m_t2code").value.trim() || "T2";
+      const t1name = document.getElementById("m_t1name").value.trim() || t1code;
+      const t2name = document.getElementById("m_t2name").value.trim() || t2code;
 
       const streams = [];
-      if (s1) streams.push({ id: "s1", name: "SERVER 1 FHD", quality: "1080p FHD", url: s1, isDefault: true });
-      if (s2) streams.push({ id: "s2", name: "SERVER 2 HD", quality: "720p HD", url: s2, isDefault: false });
+      document.querySelectorAll(".match-stream-row").forEach((row, idx) => {
+        const url = row.querySelector(".s_url").value.trim();
+        if (url) {
+          streams.push({
+            id: `${id}-s${idx+1}`,
+            name: row.querySelector(".s_name").value.trim() || `Server ${idx+1}`,
+            quality: row.querySelector(".s_quality").value,
+            url,
+            referer: row.querySelector(".s_ref").value.trim(),
+            origin: row.querySelector(".s_ref").value.trim(),
+            userAgent: row.querySelector(".s_ua").value.trim(),
+            isDefault: idx === 0
+          });
+        }
+      });
 
       const payload = {
-        id, tournament, sport, status, matchTime, timeOrScore,
-        team1Name: t1, team1Code: t1, team1FlagUrl: t1flag,
-        team2Name: t2, team2Code: t2, team2FlagUrl: t2flag,
+        id,
+        sport: document.getElementById("m_sport").value,
+        tournament: document.getElementById("m_tournament").value.trim() || "LIVE MATCH",
+        status: document.getElementById("m_status").value,
+        team1Name: t1name,
+        team1Code: t1code,
+        team1Score: document.getElementById("m_t1score").value.trim(),
+        team1FlagUrl: document.getElementById("m_t1flag").value.trim(),
+        team2Name: t2name,
+        team2Code: t2code,
+        team2Score: document.getElementById("m_t2score").value.trim(),
+        team2FlagUrl: document.getElementById("m_t2flag").value.trim(),
+        matchTime: document.getElementById("m_time").value.trim() || "07:30 PM",
+        timeOrScore: document.getElementById("m_timer").value.trim() || "LIVE",
         streams
       };
 
       const docId = `match_${id}`;
       await setDoc(doc(db, "cloud_items", docId), {
-        itemId: docId,
         itemType: "match",
-        title: `${t1} vs ${t2}`,
         payloadJson: JSON.stringify(payload),
-        visibility: "public",
-        ownerId: currentUser.uid,
+        authorUid: currentUser.uid,
         createdAt: createdAtMap[docId] || serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      alert("✓ Match published to all app users in real time!");
-    };
-
-    window.removeMatch = async (id) => {
-      if (!currentUser) return;
-      const docId = `match_${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-      await setDoc(doc(db, "cloud_items", docId), {
-        itemId: docId,
-        itemType: "match",
-        title: "Deleted",
-        payloadJson: JSON.stringify({ id, deleted: true }),
-        visibility: "public",
-        ownerId: currentUser.uid,
-        createdAt: createdAtMap[docId] || serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
+      alert("Match published to app in real-time!");
     };
 
     window.saveChannel = async () => {
       if (!currentUser) return alert("Please sign in with Google first!");
-      const id = (document.getElementById("c_id").value.trim() || "ch-" + Date.now()).replace(/[^a-zA-Z0-9_-]/g, "_");
-      const name = document.getElementById("c_name").value.trim() || "Sports Channel";
-      const category = document.getElementById("c_cat").value.trim() || "Sports";
-      const logoUrl = document.getElementById("c_logo").value.trim();
-      const url = document.getElementById("c_url").value.trim();
+      const id = document.getElementById("c_id").value.trim() || ("ch-" + Date.now());
+      const name = document.getElementById("c_name").value.trim() || "Sports HD";
+      const streams = [];
+      document.querySelectorAll(".channel-stream-row").forEach((row, idx) => {
+        const url = row.querySelector(".s_url").value.trim();
+        if (url) {
+          streams.push({
+            id: `${id}-s${idx+1}`,
+            name: row.querySelector(".s_name").value.trim() || `Server ${idx+1}`,
+            quality: row.querySelector(".s_quality").value,
+            url,
+            referer: row.querySelector(".s_ref").value.trim(),
+            origin: row.querySelector(".s_ref").value.trim(),
+            userAgent: row.querySelector(".s_ua").value.trim(),
+            isDefault: idx === 0
+          });
+        }
+      });
 
       const payload = {
-        id, name, category, logoText: name.slice(0, 3).toUpperCase(), logoUrl,
-        isFavorite: false,
-        streams: url ? [{ id: "s1", name: `${name} FHD`, quality: "FHD", url, isDefault: true }] : []
+        id,
+        name,
+        logoText: name.substring(0, 4).toUpperCase(),
+        logoUrl: document.getElementById("c_logo").value.trim(),
+        category: document.getElementById("c_cat").value.trim() || "Sports",
+        streams
       };
-
       const docId = `channel_${id}`;
       await setDoc(doc(db, "cloud_items", docId), {
-        itemId: docId,
         itemType: "channel",
-        title: name,
         payloadJson: JSON.stringify(payload),
-        visibility: "public",
-        ownerId: currentUser.uid,
+        authorUid: currentUser.uid,
         createdAt: createdAtMap[docId] || serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      alert("✓ Channel published to all app users!");
+      alert("Channel published to app in real-time!");
     };
 
-    window.removeChannel = async (id) => {
-      if (!currentUser) return;
-      const docId = `channel_${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-      await deleteDoc(doc(db, "cloud_items", docId));
+    window.saveHighlight = async () => {
+      if (!currentUser) return alert("Please sign in with Google first!");
+      const id = document.getElementById("h_id").value.trim() || ("hl-" + Date.now());
+      const payload = {
+        id,
+        title: document.getElementById("h_title").value.trim() || "Match Highlights",
+        tournament: document.getElementById("h_tournament").value.trim() || "International Series",
+        duration: document.getElementById("h_duration").value.trim() || "10:00",
+        sport: document.getElementById("h_sport").value,
+        videoUrl: document.getElementById("h_url").value.trim()
+      };
+      const docId = `highlight_${id}`;
+      await setDoc(doc(db, "cloud_items", docId), {
+        itemType: "highlight",
+        payloadJson: JSON.stringify(payload),
+        authorUid: currentUser.uid,
+        createdAt: createdAtMap[docId] || serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      alert("Highlight published to app!");
     };
 
     window.saveSettings = async () => {
       if (!currentUser) return alert("Please sign in with Google first!");
-      const docId = "config_global_app_config";
       const payload = {
         appTitle: document.getElementById("s_title").value.trim(),
         telegramLink: document.getElementById("s_tg").value.trim(),
         announcement: document.getElementById("s_announce").value.trim(),
-        version: "8.0"
+        version: "1.1"
       };
+      const docId = "config_global";
       await setDoc(doc(db, "cloud_items", docId), {
-        itemId: docId,
         itemType: "config",
-        title: payload.appTitle || "Sports Live",
         payloadJson: JSON.stringify(payload),
-        visibility: "public",
-        ownerId: currentUser.uid,
+        authorUid: currentUser.uid,
         createdAt: createdAtMap[docId] || serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      alert("✓ Broadcast Settings updated across all devices!");
+      alert("Global settings broadcasted to all users!");
     };
-  </script>
-  <script>
-    function switchTab(tab) {
-      ["matches", "channels", "settings"].forEach(t => {
-        document.getElementById("tab-" + t).style.display = (t === tab) ? "block" : "none";
+
+    window.deleteItem = async (docId) => {
+      if (!currentUser) return alert("Please sign in first!");
+      await deleteDoc(doc(db, "cloud_items", docId));
+    };
+
+    window.switchTab = (tab) => {
+      ["matches", "channels", "highlights", "settings"].forEach((t, i) => {
+        document.getElementById("tab-" + t).style.display = t === tab ? "block" : "none";
+        document.querySelectorAll(".tab-btn")[i].classList.toggle("active", t === tab);
       });
-      document.querySelectorAll(".tab-btn").forEach((btn, idx) => {
-        btn.classList.toggle("active", ["matches", "channels", "settings"][idx] === tab);
-      });
-    }
+    };
   </script>
 </body>
 </html>

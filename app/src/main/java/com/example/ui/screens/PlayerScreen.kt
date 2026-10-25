@@ -1,16 +1,20 @@
 package com.example.ui.screens
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
-import android.os.Build
+import android.media.AudioManager
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,7 +30,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -35,14 +44,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.example.data.crex.CrexMatchDetailState
 import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
 import com.example.data.model.StreamSource
 import com.example.player.ExoPlayerManager
 import com.example.ui.components.FinishedBadge
+import com.example.ui.components.LiveGlowingRedDot
 import com.example.ui.components.MatchCard
 import com.example.ui.components.MultipleStreamsModalDialog
 import com.example.ui.components.PulsingLiveBadge
@@ -50,6 +62,7 @@ import com.example.ui.components.QualityBadge
 import com.example.ui.components.TeamFlagBadge
 import com.example.ui.components.UpcomingBadge
 import com.example.ui.theme.*
+import kotlinx.coroutines.delay
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -59,10 +72,13 @@ fun PlayerScreen(
     streams: List<StreamSource>,
     playerManager: ExoPlayerManager,
     forceLowQuality: Boolean = false,
+    matchDetailState: CrexMatchDetailState? = null,
+    onRefreshDetail: () -> Unit = {},
     onBackClick: () -> Unit,
     otherMatches: List<LiveMatch> = emptyList(),
     onSwitchMatch: (LiveMatch) -> Unit = {},
     onFavoriteToggle: (String) -> Unit = {},
+    onReminderToggle: (String) -> Unit = {},
     onEnterPiP: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -75,10 +91,12 @@ fun PlayerScreen(
     val currentPosition by playerManager.currentPosition.collectAsState()
     val duration by playerManager.duration.collectAsState()
     val playbackSpeed by playerManager.playbackSpeed.collectAsState()
+    val selectedQualityLabel by playerManager.selectedQualityLabel.collectAsState()
 
     var isFullscreen by remember { mutableStateOf(false) }
     var isControlsLocked by remember { mutableStateOf(false) }
     var showStreamPickerModal by remember { mutableStateOf(false) }
+    var showQualityDialog by remember { mutableStateOf(false) }
     var resizeMode by remember { mutableStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var autoFallbackCountdown by remember { mutableStateOf(0) }
 
@@ -95,7 +113,7 @@ fun PlayerScreen(
         if (errorMessage != null && streams.size > 1) {
             for (sec in 3 downTo 1) {
                 autoFallbackCountdown = sec
-                kotlinx.coroutines.delay(1000)
+                delay(1000)
             }
             autoFallbackCountdown = 0
             if (playerManager.errorMessage.value != null) {
@@ -132,7 +150,7 @@ fun PlayerScreen(
     }
 
     val titleText = when {
-        match != null -> "${match.team1Code} vs ${match.team2Code}"
+        match != null -> "${match.team1Name} vs ${match.team2Name}"
         channelTitle != null -> channelTitle
         else -> "Live Sports Stream"
     }
@@ -140,7 +158,7 @@ fun PlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NavyDark)
+            .background(Color(0xFF0D1526))
     ) {
         if (isFullscreen) {
             // Fullscreen Player
@@ -176,6 +194,7 @@ fun PlayerScreen(
                     currentPosition = currentPosition,
                     duration = duration,
                     currentStream = currentStream,
+                    selectedQualityLabel = selectedQualityLabel,
                     onToggleLock = { isControlsLocked = !isControlsLocked },
                     onToggleMute = { playerManager.toggleMute() },
                     onPlayPause = { if (isPlaying) playerManager.pause() else playerManager.resume() },
@@ -194,6 +213,7 @@ fun PlayerScreen(
                         }
                     },
                     onOpenStreams = { showStreamPickerModal = true },
+                    onOpenQuality = { showQualityDialog = true },
                     onBack = {
                         isFullscreen = false
                         (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -201,10 +221,11 @@ fun PlayerScreen(
                 )
             }
         } else {
-            // Portrait View: Video on top + horizontal streams + match info + other matches
+            // Portrait View matching Screenshot 1 & Screenshot 3 pixel-for-pixel
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(Color(0xFF0D1526))
                     .statusBarsPadding()
             ) {
                 // Video Container (16:9 Aspect Ratio)
@@ -235,7 +256,7 @@ fun PlayerScreen(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Video Overlay Controls
+                    // Video Overlay Controls matching Screenshot 1
                     PortraitVideoControlsOverlay(
                         title = titleText,
                         isPlaying = isPlaying,
@@ -245,6 +266,7 @@ fun PlayerScreen(
                         currentPosition = currentPosition,
                         duration = duration,
                         playbackSpeed = playbackSpeed,
+                        selectedQualityLabel = selectedQualityLabel,
                         errorMessage = errorMessage,
                         autoFallbackCountdown = autoFallbackCountdown,
                         onBack = onBackClick,
@@ -263,6 +285,7 @@ fun PlayerScreen(
                             }
                             playerManager.setPlaybackSpeed(nextSpeed)
                         },
+                        onOpenQuality = { showQualityDialog = true },
                         onToggleAspectRatio = {
                             resizeMode = when (resizeMode) {
                                 AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -283,15 +306,15 @@ fun PlayerScreen(
                     )
                 }
 
-                // Horizontal Streams Available Buttons (matching screenshots 6, 7 & 9)
+                // Horizontal Streams Available Row (Screenshot 3)
                 if (streams.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(NavySurface)
+                            .background(Color(0xFF0D1526))
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         streams.forEach { stream ->
@@ -302,146 +325,135 @@ fun PlayerScreen(
                                 onClick = { playerManager.playStream(stream, forceLowQuality) }
                             )
                         }
-
-                        // More streams dialog button
-                        OutlinedButton(
-                            onClick = { showStreamPickerModal = true },
-                            modifier = Modifier.height(38.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(NavyBorder)),
-                            colors = ButtonDefaults.outlinedButtonColors(containerColor = NavySurfaceVariant)
-                        ) {
-                            Icon(Icons.Default.Tune, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("All Servers", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
                     }
                 }
 
-                // Match details card or channel banner (no small score clutter)
+                // Current Match Strip (Screenshot 1 & Screenshot 3)
                 if (match != null) {
-                    Card(
+                    val detail = matchDetailState?.detail
+                    val t1Score = detail?.team1Score?.takeIf { it.isNotBlank() } ?: match.team1Score
+                    val t2Score = detail?.team2Score?.takeIf { it.isNotBlank() } ?: match.team2Score
+
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
-                        colors = CardDefaults.cardColors(containerColor = NavySurface)
+                            .background(Color(0xFF0D1526))
+                            .clickable { showStreamPickerModal = true }
+                            .padding(start = 18.dp, end = 14.dp, top = 12.dp, bottom = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Left area: Team 1 Crest | Red Dot + Live | Team 2 Crest
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
+                            modifier = Modifier.weight(1f),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                TeamFlagBadge(flag = match.team1FlagUrl, code = match.team1Code, teamName = match.team1Name)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                TeamFlagBadge(
+                                    flag = match.team1FlagUrl,
+                                    code = match.team1Code,
+                                    teamName = match.team1Name,
+                                    sizeDp = 50
+                                )
+                                if (t1Score.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = match.team1Name,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        text = t1Score,
+                                        color = Color(0xFF00D1C1),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
-                                    Text(match.team1Code, style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary))
                                 }
                             }
 
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(horizontal = 6.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp)
                             ) {
-                                when (match.status) {
-                                    MatchStatus.LIVE -> PulsingLiveBadge()
-                                    MatchStatus.UPCOMING -> UpcomingBadge()
-                                    MatchStatus.FINISHED -> FinishedBadge()
-                                }
-                                Spacer(modifier = Modifier.height(3.dp))
+                                LiveGlowingRedDot()
+                                Spacer(modifier = Modifier.height(5.dp))
                                 Text(
-                                    text = "VS",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = CyanAccent,
-                                        fontSize = 12.sp
-                                    )
+                                    text = if (match.status == MatchStatus.FINISHED) "Finished" else "Live",
+                                    color = if (match.status == MatchStatus.FINISHED) Color(0xFF94A3B8) else Color(0xFFEF4444),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                if (match.matchTime.isNotBlank()) {
-                                    Text(
-                                        text = match.matchTime,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = TextSecondary,
-                                            fontSize = 9.sp
-                                        ),
-                                        maxLines = 1
-                                    )
-                                }
                             }
 
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.End,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(horizontalAlignment = Alignment.End) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                TeamFlagBadge(
+                                    flag = match.team2FlagUrl,
+                                    code = match.team2Code,
+                                    teamName = match.team2Name,
+                                    sizeDp = 50
+                                )
+                                if (t2Score.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = match.team2Name,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary),
-                                        textAlign = TextAlign.End,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        text = t2Score,
+                                        color = Color(0xFF00D1C1),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
-                                    Text(match.team2Code, style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary), textAlign = TextAlign.End)
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                TeamFlagBadge(flag = match.team2FlagUrl, code = match.team2Code, teamName = match.team2Name)
                             }
+                        }
+
+                        Spacer(modifier = Modifier.width(18.dp))
+
+                        // Thin vertical divider
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(46.dp)
+                                .background(Color(0xFF64748B).copy(alpha = 0.7f))
+                        )
+
+                        // Right area: Light grey circle indicator (Screenshot 1 & 3)
+                        Box(
+                            modifier = Modifier
+                                .width(82.dp)
+                                .height(46.dp)
+                                .clickable {
+                                    onRefreshDetail()
+                                    showStreamPickerModal = true
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFD1D5DB))
+                                    .border(2.dp, Color(0xFF64748B), CircleShape)
+                            )
                         }
                     }
                 }
 
-                // Other Live Matches List (matching screenshot 6)
-                if (otherMatches.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 12.dp)
-                    ) {
-                        Text(
-                            text = "OTHER LIVE & UPCOMING MATCHES",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                letterSpacing = 1.sp
-                            ),
-                            modifier = Modifier.padding(vertical = 6.dp)
+                // Other Matches List (Screenshot 1 & Screenshot 3)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
+                ) {
+                    items(otherMatches, key = { "${it.status}_${it.id}" }) { other ->
+                        MatchCard(
+                            match = other,
+                            onClick = { onSwitchMatch(other) },
+                            onFavoriteToggle = { onFavoriteToggle(other.id) },
+                            onReminderToggle = { onReminderToggle(other.id) },
+                            onStreamSelectClick = { onSwitchMatch(other) }
                         )
-
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp)
-                        ) {
-                            items(otherMatches, key = { it.id }) { other ->
-                                MatchCard(
-                                    match = other,
-                                    onClick = { onSwitchMatch(other) },
-                                    onFavoriteToggle = { onFavoriteToggle(other.id) },
-                                    onStreamSelectClick = { onSwitchMatch(other) }
-                                )
-                            }
-                        }
                     }
                 }
             }
         }
 
-        // Multiple Streams Selection Modal Dialog (matching screenshot 7)
+        // Multiple Streams Selection Modal Dialog
         if (showStreamPickerModal && streams.isNotEmpty()) {
             MultipleStreamsModalDialog(
                 streams = streams,
@@ -449,11 +461,70 @@ fun PlayerScreen(
                 matchTitle = match?.let { "${it.team1Name} vs ${it.team2Name}" } ?: channelTitle,
                 matchTournament = match?.tournament,
                 matchStatus = match?.status?.name ?: "LIVE",
+                matchDetailState = matchDetailState,
+                onRefreshDetail = onRefreshDetail,
                 onStreamSelected = { selected ->
                     playerManager.playStream(selected, forceLowQuality)
                 },
                 onDismiss = { showStreamPickerModal = false }
             )
+        }
+
+        // Video Quality / Resolution Selector Dialog
+        if (showQualityDialog) {
+            val qualityOptions = listOf(
+                Pair("Auto", null),
+                Pair("1080p FHD", 1080),
+                Pair("720p HD", 720),
+                Pair("480p SD", 480),
+                Pair("360p Data Saver", 360)
+            )
+            Dialog(onDismissRequest = { showQualityDialog = false }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .border(1.dp, CyanAccent, RoundedCornerShape(20.dp)),
+                    colors = CardDefaults.cardColors(containerColor = NavyDark),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            text = "Select Video Quality",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        qualityOptions.forEach { (label, maxHeight) ->
+                            val isSelected = selectedQualityLabel == label
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isSelected) NavySurfaceVariant else Color.Transparent)
+                                    .clickable {
+                                        playerManager.setVideoQualityConstraint(maxHeight, label)
+                                        showQualityDialog = false
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (isSelected) CyanAccent else TextPrimary,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                )
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = CyanAccent)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -464,39 +535,43 @@ fun StreamChipButton(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val borderColor = if (isSelected) CyanAccent else NavyBorder
-    val containerBg = if (isSelected) CyanAccent.copy(alpha = 0.15f) else NavySurfaceVariant
+    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF25344A)
+    val borderWidth = if (isSelected) 1.3.dp else 1.dp
+    val containerBg = if (isSelected) Color(0xFF162234) else Color(0xFF162030)
 
     Surface(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.5.dp, borderColor, RoundedCornerShape(10.dp))
+            .height(42.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .testTag("stream_chip_${stream.name.lowercase().replace(" ", "_")}"),
         color = containerBg,
-        shape = RoundedCornerShape(10.dp)
+        shape = RoundedCornerShape(8.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
-            Icon(
-                Icons.Default.PlayCircle,
-                contentDescription = null,
-                tint = if (isSelected) CyanAccent else TextSecondary,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+            if (isSelected) {
+                Icon(
+                    Icons.Default.PlayCircle,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
             Text(
-                text = stream.name,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = if (isSelected) CyanAccent else TextPrimary,
-                    fontSize = 12.sp
+                text = stream.name.uppercase(),
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    letterSpacing = 0.2.sp
                 )
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            QualityBadge(quality = stream.quality)
         }
     }
 }
@@ -519,6 +594,7 @@ fun PortraitVideoControlsOverlay(
     currentPosition: Long,
     duration: Long,
     playbackSpeed: Float = 1.0f,
+    selectedQualityLabel: String = "Auto",
     errorMessage: String?,
     autoFallbackCountdown: Int = 0,
     onBack: () -> Unit,
@@ -529,6 +605,7 @@ fun PortraitVideoControlsOverlay(
     onForward: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onCycleSpeed: () -> Unit = {},
+    onOpenQuality: () -> Unit = {},
     onToggleAspectRatio: () -> Unit = {},
     onFullscreen: () -> Unit,
     onPiP: () -> Unit,
@@ -536,15 +613,83 @@ fun PortraitVideoControlsOverlay(
     onPickAnotherStream: () -> Unit,
     onNextFallback: () -> Unit
 ) {
+    val context = LocalContext.current
     var showControls by remember { mutableStateOf(true) }
+    var gestureFeedbackText by remember { mutableStateOf<String?>(null) }
+
+    // Auto-hide controls after 4 seconds when playing
+    LaunchedEffect(showControls, isPlaying, isLocked) {
+        if (showControls && isPlaying && !isLocked) {
+            delay(4000L)
+            showControls = false
+        }
+    }
+
+    LaunchedEffect(gestureFeedbackText) {
+        if (gestureFeedbackText != null) {
+            delay(900L)
+            gestureFeedbackText = null
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable { showControls = !showControls }
+            .pointerInput(isLocked) {
+                detectTapGestures(
+                    onTap = { showControls = !showControls },
+                    onDoubleTap = { offset ->
+                        if (!isLocked) {
+                            if (offset.x < size.width / 2f) {
+                                onRewind()
+                                gestureFeedbackText = "⏪ -10s"
+                            } else {
+                                onForward()
+                                gestureFeedbackText = "⏩ +10s"
+                            }
+                        }
+                    }
+                )
+            }
+            .pointerInput(isLocked) {
+                if (!isLocked) {
+                    var startX = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { pos -> startX = pos.x },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount / size.height.coerceAtLeast(1)
+                            if (startX < size.width / 2f) {
+                                // Left side: Brightness
+                                val window = (context as? Activity)?.window
+                                if (window != null) {
+                                    val lp = window.attributes
+                                    val current = if (lp.screenBrightness < 0f) 0.5f else lp.screenBrightness
+                                    val next = (current + delta).coerceIn(0.05f, 1.0f)
+                                    lp.screenBrightness = next
+                                    window.attributes = lp
+                                    gestureFeedbackText = "☀️ Brightness ${(next * 100).toInt()}%"
+                                }
+                            } else {
+                                // Right side: Volume
+                                val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                                if (audio != null) {
+                                    val maxVol = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                                    val curVol = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                    val step = if (delta > 0.02f) 1 else if (delta < -0.02f) -1 else 0
+                                    if (step != 0) {
+                                        val newVol = (curVol + step).coerceIn(0, maxVol)
+                                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+                                        gestureFeedbackText = "🔊 Volume ${(newVol * 100) / maxVol}%"
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            }
     ) {
         if (errorMessage != null) {
-            // Error overlay with instant server fallback
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -597,16 +742,37 @@ fun PortraitVideoControlsOverlay(
                     }
                 }
             }
-        } else if (isBuffering) {
+        } else if (isBuffering && !showControls) {
             CircularProgressIndicator(
                 color = CyanAccent,
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(42.dp)
                     .align(Alignment.Center)
             )
         }
 
-        // Lock button is always visible on top right even if controls hidden
+        // Gesture Feedback Pill
+        gestureFeedbackText?.let { feedback ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 42.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.78f))
+                    .border(1.dp, CyanAccent, RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = feedback,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+        }
+
+        // Lock button when locked
         if (isLocked) {
             IconButton(
                 onClick = onToggleLock,
@@ -622,14 +788,14 @@ fun PortraitVideoControlsOverlay(
             }
         }
 
+        // Screenshot 1 Exact Video Controls Overlay
         if (showControls && errorMessage == null && !isLocked) {
-            // Top Bar
+            // Top Bar: Back arrow + Title on Left | Volume + Lock on Right
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -638,157 +804,211 @@ fun PortraitVideoControlsOverlay(
                     modifier = Modifier.weight(1f)
                 ) {
                     IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium.copy(
                             color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 18.sp
                         ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Speed Chip
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color.White.copy(alpha = 0.15f))
-                            .clickable(onClick = onCycleSpeed)
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "${playbackSpeed}x",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = CyanAccent,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp
-                            )
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(2.dp))
-                    // Aspect Ratio Button
-                    IconButton(onClick = onToggleAspectRatio, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.AspectRatio, contentDescription = "Aspect Ratio", tint = Color.White, modifier = Modifier.size(18.dp))
-                    }
-                    // Mute / Unmute Button
-                    IconButton(onClick = onToggleMute, modifier = Modifier.size(32.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(onClick = onToggleMute, modifier = Modifier.size(36.dp)) {
                         Icon(
                             if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                             contentDescription = if (isMuted) "Unmute" else "Mute",
-                            tint = if (isMuted) LiveRed else Color.White,
-                            modifier = Modifier.size(20.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
                         )
                     }
-                    // Lock Controls Button
-                    IconButton(onClick = onToggleLock, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.LockOpen, contentDescription = "Lock", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
-                    // PiP Button
-                    IconButton(onClick = onPiP, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "PiP", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
-                    // Fullscreen Button
-                    IconButton(onClick = onFullscreen, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(22.dp))
+                    IconButton(onClick = onToggleLock, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.LockOpen,
+                            contentDescription = "Lock",
+                            tint = Color.White,
+                            modifier = Modifier.size(25.dp)
+                        )
                     }
                 }
             }
 
-            // Center Play / Pause & Seek
-            Row(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalArrangement = Arrangement.spacedBy(24.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onRewind, modifier = Modifier.size(42.dp)) {
-                    Icon(Icons.Default.Replay10, contentDescription = "Rewind 10s", tint = Color.White, modifier = Modifier.size(32.dp))
-                }
-
-                IconButton(
-                    onClick = onPlayPause,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .border(1.5.dp, CyanAccent, CircleShape)
-                ) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = "Play/Pause",
-                        tint = CyanAccent,
-                        modifier = Modifier.size(34.dp)
-                    )
-                }
-
-                IconButton(onClick = onForward, modifier = Modifier.size(42.dp)) {
-                    Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White, modifier = Modifier.size(32.dp))
-                }
-            }
-
-            // Bottom Progress & Timestamp matching screenshot 6/9
-            Row(
+            // Bottom Control Bar + Seekbar (Screenshot 1)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                if (duration > 0L) {
-                    Text(
-                        text = formatPlayerTime(currentPosition),
-                        style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontSize = 11.sp)
-                    )
-                    Slider(
-                        value = currentPosition.toFloat(),
-                        onValueChange = { onSeekTo(it.toLong()) },
-                        valueRange = 0f..duration.toFloat(),
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = CyanAccent,
-                            activeTrackColor = CyanAccent,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                        )
-                    )
-                    Text(
-                        text = formatPlayerTime(duration),
-                        style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontSize = 11.sp)
-                    )
-                } else {
-                    // Live Stream Indicator
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(LiveRed)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "LIVE STREAM FEED",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = LiveRed,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                letterSpacing = 1.sp
+                // 7-Icon Control Row: Fit-Screen | PiP | FastRewind | Play/Pause | FastForward | Settings | Fullscreen
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1. Fit-Screen / Aspect Ratio Icon (white rounded box with 4 inner directional arrows)
+                    IconButton(onClick = onToggleAspectRatio, modifier = Modifier.size(36.dp)) {
+                        Canvas(modifier = Modifier.size(23.dp)) {
+                            val w = size.width
+                            val h = size.height
+                            drawRoundRect(
+                                color = Color.White,
+                                topLeft = Offset.Zero,
+                                size = Size(w, h),
+                                cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                                style = Stroke(width = 2.dp.toPx())
                             )
+                            val cx = w / 2f
+                            val cy = h / 2f
+                            drawLine(
+                                color = Color.White,
+                                start = Offset(w * 0.25f, cy),
+                                end = Offset(w * 0.75f, cy),
+                                strokeWidth = 1.8.dp.toPx()
+                            )
+                            drawLine(
+                                color = Color.White,
+                                start = Offset(cx, h * 0.25f),
+                                end = Offset(cx, h * 0.75f),
+                                strokeWidth = 1.8.dp.toPx()
+                            )
+                        }
+                    }
+
+                    // 2. Picture-in-Picture Icon (white rectangle with solid bottom-right inner box)
+                    IconButton(onClick = onPiP, modifier = Modifier.size(36.dp)) {
+                        Canvas(modifier = Modifier.size(width = 25.dp, height = 19.dp)) {
+                            val w = size.width
+                            val h = size.height
+                            drawRoundRect(
+                                color = Color.White,
+                                topLeft = Offset.Zero,
+                                size = Size(w, h),
+                                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+                                style = Stroke(width = 2.dp.toPx())
+                            )
+                            drawRect(
+                                color = Color.White,
+                                topLeft = Offset(w * 0.45f, h * 0.44f),
+                                size = Size(w * 0.40f, h * 0.38f)
+                            )
+                        }
+                    }
+
+                    // 3. Fast Rewind ⏪
+                    IconButton(onClick = onRewind, modifier = Modifier.size(38.dp)) {
+                        Icon(
+                            Icons.Default.FastRewind,
+                            contentDescription = "Rewind 10s",
+                            tint = Color.White.copy(alpha = 0.55f),
+                            modifier = Modifier.size(32.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.weight(1f))
+
+                    // 4. Play / Pause ▶
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(42.dp)) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = Color.White,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
+
+                    // 5. Fast Forward ⏩
+                    IconButton(onClick = onForward, modifier = Modifier.size(38.dp)) {
+                        Icon(
+                            Icons.Default.FastForward,
+                            contentDescription = "Forward 10s",
+                            tint = Color.White.copy(alpha = 0.55f),
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    // 6. Settings Gear ⚙
+                    IconButton(onClick = onOpenQuality, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Video Settings",
+                            tint = Color.White,
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+
+                    // 7. Fullscreen Corners ⛶
+                    IconButton(onClick = onFullscreen, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.Fullscreen,
+                            contentDescription = "Fullscreen",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Seekbar Row: 00:00 [--------] 00:00
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Realtime HLS / Low Latency",
-                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 10.sp)
+                        text = formatPlayerTime(currentPosition),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = Color(0xFFD1D5DB),
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
+                    if (duration > 0L) {
+                        Slider(
+                            value = currentPosition.toFloat(),
+                            onValueChange = { onSeekTo(it.toLong()) },
+                            valueRange = 0f..duration.toFloat(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(20.dp)
+                                .padding(horizontal = 10.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color.White,
+                                inactiveTrackColor = Color(0xFF3A3A3A)
+                            )
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 12.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color(0xFF3A3A3A))
+                        )
+                    }
+                    Text(
+                        text = formatPlayerTime(duration),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = Color(0xFFD1D5DB),
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     )
                 }
             }
@@ -806,6 +1026,7 @@ fun FullscreenPlayerOverlay(
     currentPosition: Long,
     duration: Long,
     currentStream: StreamSource?,
+    selectedQualityLabel: String = "Auto",
     onToggleLock: () -> Unit,
     onToggleMute: () -> Unit,
     onPlayPause: () -> Unit,
@@ -815,14 +1036,81 @@ fun FullscreenPlayerOverlay(
     onToggleFullscreen: () -> Unit,
     onToggleAspectRatio: () -> Unit,
     onOpenStreams: () -> Unit,
+    onOpenQuality: () -> Unit = {},
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     var showControls by remember { mutableStateOf(true) }
+    var gestureFeedbackText by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(showControls, isPlaying, isLocked) {
+        if (showControls && isPlaying && !isLocked) {
+            delay(4000L)
+            showControls = false
+        }
+    }
+
+    LaunchedEffect(gestureFeedbackText) {
+        if (gestureFeedbackText != null) {
+            delay(900L)
+            gestureFeedbackText = null
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable { showControls = !showControls }
+            .pointerInput(isLocked) {
+                detectTapGestures(
+                    onTap = { showControls = !showControls },
+                    onDoubleTap = { offset ->
+                        if (!isLocked) {
+                            if (offset.x < size.width / 2f) {
+                                onRewind()
+                                gestureFeedbackText = "⏪ -10s"
+                            } else {
+                                onForward()
+                                gestureFeedbackText = "⏩ +10s"
+                            }
+                        }
+                    }
+                )
+            }
+            .pointerInput(isLocked) {
+                if (!isLocked) {
+                    var startX = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { pos -> startX = pos.x },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount / size.height.coerceAtLeast(1)
+                            if (startX < size.width / 2f) {
+                                val window = (context as? Activity)?.window
+                                if (window != null) {
+                                    val lp = window.attributes
+                                    val current = if (lp.screenBrightness < 0f) 0.5f else lp.screenBrightness
+                                    val next = (current + delta).coerceIn(0.05f, 1.0f)
+                                    lp.screenBrightness = next
+                                    window.attributes = lp
+                                    gestureFeedbackText = "☀️ Brightness ${(next * 100).toInt()}%"
+                                }
+                            } else {
+                                val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                                if (audio != null) {
+                                    val maxVol = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                                    val curVol = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                    val step = if (delta > 0.02f) 1 else if (delta < -0.02f) -1 else 0
+                                    if (step != 0) {
+                                        val newVol = (curVol + step).coerceIn(0, maxVol)
+                                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+                                        gestureFeedbackText = "🔊 Volume ${(newVol * 100) / maxVol}%"
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            }
     ) {
         if (isBuffering) {
             CircularProgressIndicator(
@@ -831,6 +1119,26 @@ fun FullscreenPlayerOverlay(
                     .size(54.dp)
                     .align(Alignment.Center)
             )
+        }
+
+        gestureFeedbackText?.let { feedback ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.78f))
+                    .border(1.dp, CyanAccent, RoundedCornerShape(50))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = feedback,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
         }
 
         // Lock button is always visible on right
@@ -879,7 +1187,9 @@ fun FullscreenPlayerOverlay(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Mute / Unmute
+                    TextButton(onClick = onOpenQuality) {
+                        Text(selectedQualityLabel, color = GoldYellow, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                     IconButton(onClick = onToggleMute) {
                         Icon(
                             if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
@@ -975,11 +1285,19 @@ fun FullscreenPlayerOverlay(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "LIVE STREAM BROADCAST",
-                            style = MaterialTheme.typography.labelMedium.copy(
+                            text = "LIVE BROADCAST",
+                            style = MaterialTheme.typography.bodySmall.copy(
                                 color = LiveRed,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
                             )
+                        )
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    currentStream?.let {
+                        Text(
+                            text = "Server: ${it.name} (${it.quality})",
+                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
                         )
                     }
                 }

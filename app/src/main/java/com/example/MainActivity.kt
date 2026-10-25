@@ -10,36 +10,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.repeatOnLifecycle
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.data.model.*
 import com.example.data.repository.SportsStreamRepository
 import com.example.player.ExoPlayerManager
-import com.example.ui.auth.AuthGateScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.signOut
 import com.example.ui.components.*
@@ -54,11 +46,14 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 enum class AppScreen {
     SPLASH,
     MAIN_TABS,
-    PLAYER
+    PLAYER,
+    ADMIN_PANEL
 }
 
 class MainActivity : ComponentActivity() {
@@ -122,7 +117,21 @@ fun FootballLiveTvApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
-    val currentUser by Firebase.auth.authStateFlow().collectAsState(initial = Firebase.auth.currentUser)
+    val authFlow = remember {
+        try {
+            Firebase.auth.authStateFlow()
+        } catch (_: Exception) {
+            kotlinx.coroutines.flow.flowOf(null)
+        }
+    }
+    val initialUser = remember {
+        try {
+            Firebase.auth.currentUser
+        } catch (_: Exception) {
+            null
+        }
+    }
+    val currentUser by authFlow.collectAsState(initial = initialUser)
 
     LaunchedEffect(currentUser?.uid) {
         val uid = currentUser?.uid
@@ -166,6 +175,7 @@ fun FootballLiveTvApp(
     var scoresSportTitle by remember { mutableStateOf("Cricket") }
     var showAnnouncementBanner by remember { mutableStateOf(true) }
     var showTelegramDialog by remember { mutableStateOf(false) }
+    var showAdminPinDialog by remember { mutableStateOf(false) }
 
     val isPlayerPlaying by playerManager.isPlaying.collectAsState()
     val currentStream by playerManager.currentStream.collectAsState()
@@ -174,7 +184,6 @@ fun FootballLiveTvApp(
         streamPickerMatch = match
         streamPickerChannel = null
         showStreamPickerModal = true
-        // Fetch getSV3 match details on-demand ONLY when a user opens a match
         coroutineScope.launch {
             repository.loadMatchDetailOnDemand(match.id, force = false)
         }
@@ -196,35 +205,38 @@ fun FootballLiveTvApp(
         currentScreen = AppScreen.PLAYER
     }
 
-    // 1. Auto-refresh Live list every 30 seconds ONLY while the app is visible (STARTED/RESUMED).
-    // Automatically stops polling when the app goes to background or is closed.
-    LaunchedEffect(lifecycleOwner) {
+    // 1. Auto-refresh Live list using admin-configured interval while visible
+    LaunchedEffect(lifecycleOwner, config.autoRefreshIntervalSeconds, config.syncLiveEnabled) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                repository.refreshLiveMatches(force = false)
-                delay(30_000L)
+                if (config.syncLiveEnabled) {
+                    repository.refreshLiveMatches(force = false)
+                }
+                val intervalMs = (config.autoRefreshIntervalSeconds.coerceIn(15, 300) * 1000L)
+                delay(intervalMs)
             }
         }
     }
 
-    // 2. Refresh Upcoming every 15 minutes while the app is visible.
-    LaunchedEffect(lifecycleOwner) {
+    // 2. Refresh Upcoming every 15 minutes while visible
+    LaunchedEffect(lifecycleOwner, config.syncUpcomingEnabled) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                repository.refreshUpcomingMatches(force = false)
+                if (config.syncUpcomingEnabled) {
+                    repository.refreshUpcomingMatches(force = false)
+                }
                 delay(15 * 60_000L)
             }
         }
     }
 
-    // 3. Refresh Finished when opened (or when All/Scores modal is opened) and then no more often than every 30 minutes.
-    LaunchedEffect(selectedStatus, showScoresDialog) {
-        if (selectedStatus == MatchStatus.FINISHED || selectedStatus == null || showScoresDialog) {
+    // 3. Refresh Finished when needed
+    LaunchedEffect(selectedStatus, showScoresDialog, config.syncFinishedEnabled) {
+        if (config.syncFinishedEnabled && (selectedStatus == MatchStatus.FINISHED || selectedStatus == null || showScoresDialog)) {
             repository.refreshFinishedMatches(force = false)
         }
     }
 
-    // Top Level Navigation
     when (currentScreen) {
         AppScreen.SPLASH -> {
             SplashScreen(
@@ -235,21 +247,49 @@ fun FootballLiveTvApp(
             )
         }
 
+        AppScreen.ADMIN_PANEL -> {
+            BackHandler {
+                currentScreen = AppScreen.MAIN_TABS
+            }
+            AdminPanelScreen(
+                repository = repository,
+                onBackClick = {
+                    currentScreen = AppScreen.MAIN_TABS
+                },
+                onTestPlayStream = { stream ->
+                    startPlaying(null, stream.name, listOf(stream))
+                }
+            )
+        }
+
         AppScreen.PLAYER -> {
+            val latestActiveMatch = activeMatch?.let { m -> matches.find { it.id == m.id } ?: m }
+            val activeDetailState = latestActiveMatch?.let { m ->
+                crexState.activeDetailState.takeIf { it.matchId == m.id.removePrefix("crex-") }
+            }
             PlayerScreen(
-                match = activeMatch,
+                match = latestActiveMatch,
                 channelTitle = activeChannelTitle,
                 streams = activeStreams,
                 playerManager = playerManager,
                 forceLowQuality = config.forceLowQuality,
+                matchDetailState = activeDetailState,
+                onRefreshDetail = {
+                    latestActiveMatch?.let { m ->
+                        coroutineScope.launch {
+                            repository.loadMatchDetailOnDemand(m.id, force = true)
+                        }
+                    }
+                },
                 onBackClick = {
                     currentScreen = AppScreen.MAIN_TABS
                 },
-                otherMatches = matches.filter { it.id != activeMatch?.id },
+                otherMatches = matches.filter { it.id != latestActiveMatch?.id },
                 onSwitchMatch = { newMatch ->
                     startPlaying(newMatch, null, newMatch.streams)
                 },
                 onFavoriteToggle = { repository.toggleMatchFavorite(it) },
+                onReminderToggle = { repository.toggleMatchReminder(it) },
                 onEnterPiP = onEnterPiP
             )
         }
@@ -257,21 +297,20 @@ fun FootballLiveTvApp(
         AppScreen.MAIN_TABS -> {
             Scaffold(
                 topBar = {
-                    if (selectedTab != NavTab.LIVE_EVENTS) {
-                        Column {
-                            TopSportsBar(
-                                title = config.appTitle,
+                    Column {
+                        TopSportsBar(
+                            title = if (config.appTitle == "Sports Live") "Football Live Tv" else config.appTitle,
                             onTelegramClick = { showTelegramDialog = true },
                             onRefreshClick = {
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Refreshing 2026 live & upcoming matches...")
+                                    snackbarHostState.showSnackbar("ম্যাচ আপডেট সিঙ্ক হচ্ছে...")
                                     val res = repository.syncFromRemoteFeed()
                                     res.fold(
                                         onSuccess = { count ->
-                                            snackbarHostState.showSnackbar("Updated $count live & upcoming matches!")
+                                            snackbarHostState.showSnackbar("$count টি ভেরিফাইড ম্যাচ আপডেট হয়েছে!")
                                         },
-                                        onFailure = { err ->
-                                            snackbarHostState.showSnackbar("Sync: ${err.localizedMessage ?: "Network error"}")
+                                        onFailure = {
+                                            snackbarHostState.showSnackbar("ম্যাচ আপডেট সিঙ্ক সাময়িকভাবে ব্যহত হয়েছে। একটু পর আবার চেষ্টা করুন।")
                                         }
                                     )
                                 }
@@ -286,8 +325,8 @@ fun FootballLiveTvApp(
                             }
                         )
 
-                        // Announcement Banner
-                        if (showAnnouncementBanner && config.announcement.isNotBlank()) {
+                        // Announcement Banner (hidden on Live Events tab to match clean header layout)
+                        if (selectedTab != NavTab.LIVE_EVENTS && showAnnouncementBanner && config.announcement.isNotBlank()) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -311,12 +350,11 @@ fun FootballLiveTvApp(
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f)
                                 )
-                                    IconButton(
-                                        onClick = { showAnnouncementBanner = false },
-                                        modifier = Modifier.size(20.dp)
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
-                                    }
+                                IconButton(
+                                    onClick = { showAnnouncementBanner = false },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
                                 }
                             }
                         }
@@ -434,43 +472,34 @@ fun FootballLiveTvApp(
                                 onStatusSelect = { selectedStatus = it },
                                 onManualRefresh = {
                                     coroutineScope.launch {
-                                        when (selectedStatus) {
-                                            MatchStatus.LIVE -> {
-                                                val s = repository.refreshLiveMatches(force = true)
-                                                snackbarHostState.showSnackbar(
-                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Live CREX matches"
-                                                )
+                                        val res = repository.syncFromRemoteFeed()
+                                        res.fold(
+                                            onSuccess = { count ->
+                                                snackbarHostState.showSnackbar("$count টি ভেরিফাইড ম্যাচ আপডেট হয়েছে!")
+                                            },
+                                            onFailure = {
+                                                snackbarHostState.showSnackbar("ম্যাচ আপডেট সিঙ্ক সাময়িকভাবে ব্যহত হয়েছে।")
                                             }
-                                            MatchStatus.UPCOMING -> {
-                                                val s = repository.refreshUpcomingMatches(force = true)
-                                                snackbarHostState.showSnackbar(
-                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Upcoming CREX matches"
-                                                )
-                                            }
-                                            MatchStatus.FINISHED -> {
-                                                val s = repository.refreshFinishedMatches(force = true)
-                                                snackbarHostState.showSnackbar(
-                                                    s.errorMessage ?: "Refreshed ${s.matches.size} Finished CREX matches"
-                                                )
-                                            }
-                                            null -> {
-                                                val res = repository.syncFromRemoteFeed()
-                                                res.fold(
-                                                    onSuccess = { count ->
-                                                        snackbarHostState.showSnackbar("Refreshed $count CREX matches")
-                                                    },
-                                                    onFailure = { err ->
-                                                        snackbarHostState.showSnackbar("CREX Error: ${err.localizedMessage}")
-                                                    }
-                                                )
-                                            }
-                                        }
+                                        )
                                     }
                                 },
                                 onMatchClick = { match ->
                                     openMatchModal(match)
                                 },
-                                onFavoriteToggle = { repository.toggleMatchFavorite(it) },
+                                onFavoriteToggle = { id ->
+                                    repository.toggleMatchFavorite(id)
+                                },
+                                onReminderToggle = { id ->
+                                    repository.toggleMatchReminder(id)
+                                    val target = matches.find { it.id == id }
+                                    coroutineScope.launch {
+                                        val enabled = target?.isReminderSet != true
+                                        snackbarHostState.showSnackbar(
+                                            if (enabled) "🔔 Match reminder set for ${target?.team1Code ?: ""} vs ${target?.team2Code ?: ""}!"
+                                            else "Match reminder removed"
+                                        )
+                                    }
+                                },
                                 onStreamSelectClick = { match ->
                                     openMatchModal(match)
                                 },
@@ -582,7 +611,9 @@ fun FootballLiveTvApp(
                                         )
                                     }
                                 },
-                                onAdminPanelClick = {},
+                                onAdminPanelClick = {
+                                    showAdminPinDialog = true
+                                },
                                 onSignOutClick = {
                                     repository.stopCloudSync()
                                     signOut(
@@ -598,6 +629,19 @@ fun FootballLiveTvApp(
                 }
             }
         }
+    }
+
+    // Modal: Admin PIN Authorization
+    if (showAdminPinDialog) {
+        AdminPinDialog(
+            correctPin = config.adminPin.ifBlank { "1234" },
+            onSuccess = {
+                currentScreen = AppScreen.ADMIN_PANEL
+            },
+            onDismiss = {
+                showAdminPinDialog = false
+            }
+        )
     }
 
     // Modal: Stream selection & on-demand CREX getSV3 match details
@@ -620,6 +664,10 @@ fun FootballLiveTvApp(
                     coroutineScope.launch {
                         repository.loadMatchDetailOnDemand(latestMatch.id, force = true)
                     }
+                },
+                onAddCustomStream = { newStream ->
+                    val updated = repository.attachCustomStreamToMatch(latestMatch.id, newStream) ?: latestMatch
+                    startPlaying(updated, null, listOf(newStream) + updated.streams.filter { it.id != newStream.id })
                 },
                 onStreamSelected = { selected ->
                     startPlaying(latestMatch, null, listOf(selected) + latestMatch.streams.filter { it.id != selected.id })
@@ -687,7 +735,6 @@ fun FootballLiveTvApp(
             onDismiss = { showHighlightsDialog = false }
         )
     }
-
 
     // Modal: Scores dialog
     if (showScoresDialog) {
