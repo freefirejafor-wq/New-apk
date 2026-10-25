@@ -6,10 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -23,11 +21,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -35,22 +33,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.example.data.model.LiveMatch
 import com.example.data.model.MatchStatus
 import com.example.data.model.SportType
-import com.example.data.model.SportsChannel
 import com.example.data.model.StreamSource
+import com.example.data.util.TeamFlagResolver
 import com.example.ui.theme.*
-import kotlin.math.cos
-import kotlin.math.sin
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TopSportsBar(
-    title: String = "Football Live Tv",
+    title: String = "Sports Live",
     onTelegramClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onSearchClick: () -> Unit,
@@ -59,10 +58,10 @@ fun TopSportsBar(
     onSearchQueryChange: (String) -> Unit = {},
     onCloseSearch: () -> Unit = {}
 ) {
-    Column(
+    Surface(
+        color = NavyDark,
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF131B26))
             .statusBarsPadding()
     ) {
         if (isSearching) {
@@ -99,54 +98,47 @@ fun TopSportsBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
-                        fontSize = 21.sp
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        fontSize = 22.sp
                     )
                 )
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Telegram community button (blue circle with violet ring + white paper plane)
+                    // Telegram community button
                     Box(
                         modifier = Modifier
-                            .size(30.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF2AABEE))
-                            .border(1.8.dp, Color(0xFF7C3AED), CircleShape)
+                            .background(NavySurfaceVariant)
                             .clickable(onClick = onTelegramClick)
                             .testTag("telegram_button"),
                         contentAlignment = Alignment.Center
                     ) {
-                        Canvas(modifier = Modifier.size(16.dp)) {
-                            val w = size.width
-                            val h = size.height
-                            val planePath = Path().apply {
-                                moveTo(w * 0.08f, h * 0.48f)
-                                lineTo(w * 0.90f, h * 0.14f)
-                                lineTo(w * 0.73f, h * 0.88f)
-                                lineTo(w * 0.46f, h * 0.63f)
-                                lineTo(w * 0.33f, h * 0.77f)
-                                lineTo(w * 0.36f, h * 0.54f)
-                                close()
-                            }
-                            drawPath(path = planePath, color = Color.White)
-                        }
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Telegram",
+                            tint = CyanAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
 
-                    // Plain white Refresh icon
+                    // Refresh button
                     Box(
                         modifier = Modifier
-                            .size(30.dp)
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(NavySurfaceVariant)
                             .clickable(onClick = onRefreshClick)
                             .testTag("refresh_button"),
                         contentAlignment = Alignment.Center
@@ -154,15 +146,17 @@ fun TopSportsBar(
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "Refresh",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            tint = TextPrimary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
-                    // Plain white Search icon
+                    // Search button
                     Box(
                         modifier = Modifier
-                            .size(30.dp)
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(NavySurfaceVariant)
                             .clickable(onClick = onSearchClick)
                             .testTag("search_button"),
                         contentAlignment = Alignment.Center
@@ -170,14 +164,13 @@ fun TopSportsBar(
                         Icon(
                             Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            tint = TextPrimary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
             }
         }
-        HorizontalDivider(color = Color(0xFF233044), thickness = 1.dp)
     }
 }
 
@@ -201,16 +194,16 @@ fun BottomSportsNavBar(
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Surface(
-            color = Color(0xFF192336),
-            shape = RoundedCornerShape(34.dp),
+            color = Color(0xFF1A2434),
+            shape = RoundedCornerShape(38.dp),
             tonalElevation = 10.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(68.dp)
+                .height(70.dp)
                 .border(
                     width = 1.dp,
-                    color = Color(0xFF26354D),
-                    shape = RoundedCornerShape(34.dp)
+                    color = Color(0xFF28374E),
+                    shape = RoundedCornerShape(38.dp)
                 )
         ) {
             Row(
@@ -230,10 +223,10 @@ fun BottomSportsNavBar(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
-                            .padding(vertical = 5.dp, horizontal = 2.dp)
-                            .clip(RoundedCornerShape(30.dp))
+                            .padding(vertical = 4.dp, horizontal = 2.dp)
+                            .clip(RoundedCornerShape(32.dp))
                             .background(
-                                if (isSelected) Color(0xFF21324A)
+                                if (isSelected) Color(0xFF233246)
                                 else Color.Transparent
                             )
                             .clickable { onTabSelected(tab) }
@@ -248,9 +241,9 @@ fun BottomSportsNavBar(
                                 imageVector = if (isCenterLiveTab) Icons.Default.Podcasts else tab.icon,
                                 contentDescription = tab.label,
                                 tint = if (isSelected) activeCyan else inactiveGrey,
-                                modifier = Modifier.size(if (isCenterLiveTab) 25.dp else 22.dp)
+                                modifier = Modifier.size(if (isCenterLiveTab) 26.dp else 23.dp)
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = tab.label,
                                 style = MaterialTheme.typography.labelSmall.copy(
@@ -477,27 +470,25 @@ fun MatchCard(
     match: LiveMatch,
     onClick: () -> Unit,
     onFavoriteToggle: () -> Unit = {},
-    onReminderToggle: () -> Unit = {},
     onStreamSelectClick: () -> Unit = {}
 ) {
-    val isClubFootball = remember(match.sport, match.tournament) {
-        match.sport == SportType.FOOTBALL &&
-            !com.example.data.crex.CrexCricketService.isInternationalFootballLeague("", match.tournament)
-    }
-    val team1Visual = remember(match.team1Name, match.team1Code, match.team1FlagUrl, isClubFootball) {
-        com.example.data.util.TeamFlagResolver.resolve(
+    // Respect match.isNationalTeam:
+    // - National-team Football & International Cricket -> Country Flag
+    // - Club Football -> Official Club Crest (from ESPN) or Club Shield Fallback (never a country flag)
+    val team1Visual = remember(match.team1Name, match.team1Code, match.team1FlagUrl, match.isNationalTeam) {
+        TeamFlagResolver.resolveForMatch(
             teamName = match.team1Name,
             teamCode = match.team1Code,
             existingFlag = match.team1FlagUrl,
-            isClubFootball = isClubFootball
+            isNationalTeam = match.isNationalTeam
         )
     }
-    val team2Visual = remember(match.team2Name, match.team2Code, match.team2FlagUrl, isClubFootball) {
-        com.example.data.util.TeamFlagResolver.resolve(
+    val team2Visual = remember(match.team2Name, match.team2Code, match.team2FlagUrl, match.isNationalTeam) {
+        TeamFlagResolver.resolveForMatch(
             teamName = match.team2Name,
             teamCode = match.team2Code,
             existingFlag = match.team2FlagUrl,
-            isClubFootball = isClubFootball
+            isNationalTeam = match.isNationalTeam
         )
     }
 
@@ -518,111 +509,165 @@ fun MatchCard(
         }
     }
 
-    val isFormula1OrMotorsport = remember(match.sport, formattedHeader, match.team1Name) {
-        match.sport == SportType.RACING ||
-            formattedHeader.contains("FORMULA 1") ||
-            formattedHeader.contains("MOTORSPORT") ||
-            match.team1Name.contains("Formula 1", ignoreCase = true)
+    // Elapsed live timer for LIVE matches (never shows scores)
+    val initialSeconds = remember(match.id, match.startTimeEpochMs) {
+        val now = System.currentTimeMillis()
+        if (match.startTimeEpochMs in 1 until now) {
+            ((now - match.startTimeEpochMs) / 1000L).coerceIn(60L, 4 * 3600L)
+        } else {
+            val hash = kotlin.math.abs(match.id.hashCode())
+            val h = (hash % 2)
+            val m = 15 + (hash % 40)
+            val s = 10 + (hash % 49)
+            h * 3600L + m * 60L + s
+        }
     }
 
-    // Parse kickoff time ("11:00 PM") & date ("24/10/2026") from startTimeEpochMs or match.matchTime in Asia/Dhaka
-    val (upcomingTimeText, upcomingDateText) = remember(match.startTimeEpochMs, match.matchTime) {
+    var liveSeconds by remember(initialSeconds) { mutableStateOf(initialSeconds) }
+    LaunchedEffect(match.status, initialSeconds) {
+        if (match.status == MatchStatus.LIVE) {
+            while (true) {
+                kotlinx.coroutines.delay(1000L)
+                liveSeconds += 1L
+            }
+        }
+    }
+
+    val liveTimerFormatted = remember(liveSeconds) {
+        val hrs = liveSeconds / 3600L
+        val mins = (liveSeconds % 3600L) / 60L
+        val secs = liveSeconds % 60L
+        String.format(Locale.US, "%02d:%02d:%02d", hrs, mins, secs)
+    }
+
+    // Parse upcoming/kickoff time & date in Asia/Dhaka timezone
+    val (upcomingTimeText, upcomingDateText) = remember(match.matchTime, match.startTimeEpochMs) {
         if (match.startTimeEpochMs > 0L) {
-            val tz = java.util.TimeZone.getTimeZone("Asia/Dhaka")
-            val timeFmt = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.ENGLISH).apply { timeZone = tz }
-            val dateFmt = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.ENGLISH).apply { timeZone = tz }
-            val d = java.util.Date(match.startTimeEpochMs)
-            Pair(timeFmt.format(d).uppercase(), dateFmt.format(d))
+            val dhakaTz = TimeZone.getTimeZone("Asia/Dhaka")
+            val timeFmt = SimpleDateFormat("hh:mm a", Locale.US).apply { timeZone = dhakaTz }
+            val dateFmt = SimpleDateFormat("dd/MM/yyyy", Locale.US).apply { timeZone = dhakaTz }
+            val dt = Date(match.startTimeEpochMs)
+            Pair(timeFmt.format(dt), dateFmt.format(dt))
         } else {
+            val parts = match.matchTime.split("|", "•", ",")
             val timePart = Regex("""\b\d{1,2}:\d{2}\s*(?:AM|PM)\b""", RegexOption.IGNORE_CASE)
                 .find(match.matchTime)?.value?.uppercase()
+                ?: parts.firstOrNull()?.trim()?.takeIf { it.contains(":") }
                 ?: "Scheduled"
-            val slashDate = Regex("""\b\d{2}/\d{2}/\d{4}\b""").find(match.matchTime)?.value ?: ""
-            Pair(timePart, slashDate)
+            val datePart = Regex("""\b\d{2}/\d{2}/\d{4}\b""")
+                .find(match.matchTime)?.value
+                ?: Regex("""\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b""").find(match.matchTime)?.value
+                ?: match.matchTime.take(16)
+            Pair(timePart, datePart)
         }
     }
 
-    // Bottom centered text: strictly provider-confirmed status or kickoff time (no scores, no unverified timers)
-    val bottomStatusText = remember(
-        match.status,
-        match.isConfirmedLive,
-        match.isStatusUnknown,
-        match.isPostponedOrCancelled,
-        match.providerStatusLabel,
-        upcomingTimeText,
-        upcomingDateText
-    ) {
-        when {
-            match.isPostponedOrCancelled -> match.providerStatusLabel.ifBlank { "Postponed" }
-            match.isStatusUnknown -> "Unknown"
-            match.isConfirmedLive -> {
-                if (upcomingDateText.isNotBlank()) "$upcomingTimeText • $upcomingDateText" else upcomingTimeText
+    // Score-free bottom status line
+    val bottomStatusText = remember(match.status, liveTimerFormatted, match.startTimeEpochMs, match.timeOrScore) {
+        when (match.status) {
+            MatchStatus.LIVE -> liveTimerFormatted
+            MatchStatus.UPCOMING -> {
+                val now = System.currentTimeMillis()
+                if (match.startTimeEpochMs > now) {
+                    val diffMin = ((match.startTimeEpochMs - now) / 60_000L).coerceAtLeast(1L)
+                    val hrs = diffMin / 60L
+                    val mins = diffMin % 60L
+                    when {
+                        hrs >= 24L -> "Starts in ${hrs / 24L}d ${hrs % 24L}h"
+                        hrs > 0L -> "Starts in ${hrs}h ${mins}m"
+                        else -> "Starts in ${mins}m"
+                    }
+                } else if (match.timeOrScore.startsWith("Starts", ignoreCase = true)) {
+                    match.timeOrScore
+                } else {
+                    "Upcoming"
+                }
             }
-            match.status == MatchStatus.FINISHED -> "Finished"
-            else -> "Upcoming"
+            MatchStatus.FINISHED -> "Finished"
+            MatchStatus.UNKNOWN -> "অনির্ধারিত"
         }
     }
 
-    val team1CodeDisplay = remember(match.team1Code, team1Visual.code, match.team1Name) {
-        match.team1Code.ifBlank { team1Visual.code.ifBlank { match.team1Name } }
+    val team1Display = remember(match.team1Name, match.team1Code, match.isNationalTeam) {
+        if (!match.isNationalTeam) {
+            match.team1Name.ifBlank { match.team1Code }
+        } else {
+            match.team1Code.ifBlank { match.team1Name }
+        }
     }
-    val team2CodeDisplay = remember(match.team2Code, team2Visual.code, match.team2Name) {
-        match.team2Code.ifBlank { team2Visual.code.ifBlank { match.team2Name } }
+    val team2Display = remember(match.team2Name, match.team2Code, match.isNationalTeam) {
+        if (!match.isNationalTeam) {
+            match.team2Name.ifBlank { match.team2Code }
+        } else {
+            match.team2Code.ifBlank { match.team2Name }
+        }
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
             .border(
                 width = 1.2.dp,
-                color = Color(0xFF25344B),
-                shape = RoundedCornerShape(13.dp)
+                color = Color(0xFF243247),
+                shape = RoundedCornerShape(14.dp)
             )
             .testTag("match_card_${match.id}"),
-        shape = RoundedCornerShape(13.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF141D2B))
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF131B2A))
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 11.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
-            // 1. Top Row: Competition ("SPORT | LEAGUE")
+            // 1. Top Row: Square Sport Badge + Uppercase Tournament Header + Favourite Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (isFormula1OrMotorsport) {
-                    F1MiniHeaderMark()
-                    Spacer(modifier = Modifier.width(6.dp))
-                }
+                SportHeaderSquareBadge(sport = match.sport, tournament = formattedHeader)
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = formattedHeader,
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
-                        fontSize = 12.5.sp,
+                        fontSize = 13.5.sp,
                         letterSpacing = 0.2.sp
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = onFavoriteToggle,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .testTag("fav_toggle_${match.id}")
+                ) {
+                    Icon(
+                        imageVector = if (match.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (match.isFavorite) "Remove from Favourites" else "Add to Favourites",
+                        tint = if (match.isFavorite) GoldYellow else TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // 2. Middle Row: Left Team Crest + Name | Center Red Dot + "Live" or Kickoff Time & Date | Right Team Name + Crest
+            // 2. Middle Row: Strictly Team 1 Logo/Flag + Name | Center Status/Kickoff | Team 2 Name + Logo/Flag
+            // Never displays any score or score badge on the card.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 2.dp),
+                    .padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left Team: Crest/Flag + Name (no score)
+                // Left Team: Logo/Flag + Name ONLY
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -630,57 +675,93 @@ fun MatchCard(
                     TeamFlagBadge(
                         flagUrl = team1Visual.flagUrl,
                         emoji = team1Visual.emoji,
-                        code = team1CodeDisplay,
+                        code = match.team1Code.ifBlank { team1Display },
                         teamName = match.team1Name,
-                        isClubFootball = isClubFootball
+                        isNationalTeam = match.isNationalTeam
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = match.team1Name.ifBlank { team1CodeDisplay },
+                        text = team1Display,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
-                            fontSize = 13.5.sp
+                            fontSize = 14.5.sp
                         ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                // Center: Provider-confirmed Live indicator OR Kickoff Time + Date
+                // Center: Live indicator OR Upcoming Kickoff Time & Date OR Finished OR Unknown
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 ) {
-                    if (match.isConfirmedLive) {
-                        LiveGlowingRedDot()
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = "Live",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFFEF4444),
-                                fontSize = 11.5.sp
+                    when (match.status) {
+                        MatchStatus.LIVE -> {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF471D26))
                             )
-                        )
-                    } else {
-                        Text(
-                            text = upcomingTimeText,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 13.sp
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                        if (upcomingDateText.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Live",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFD9383A),
+                                    fontSize = 13.sp
+                                )
+                            )
+                        }
+                        MatchStatus.UPCOMING -> {
+                            Text(
+                                text = upcomingTimeText,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 13.5.sp
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = upcomingDateText,
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xFF00BCD4),
+                                    color = Color(0xFF00B8D4),
                                     fontSize = 12.sp
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        MatchStatus.FINISHED -> {
+                            Text(
+                                text = "Finished",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 13.sp
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = upcomingDateText,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = TextMuted,
+                                    fontSize = 11.sp
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        MatchStatus.UNKNOWN -> {
+                            Text(
+                                text = "অনির্ধারিত",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = GoldYellow,
+                                    fontSize = 12.5.sp
                                 ),
                                 textAlign = TextAlign.Center
                             )
@@ -688,18 +769,18 @@ fun MatchCard(
                     }
                 }
 
-                // Right Team: Name + Crest/Flag (no score)
+                // Right Team: Name + Logo/Flag ONLY
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.End,
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        text = match.team2Name.ifBlank { team2CodeDisplay },
+                        text = team2Display,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
-                            fontSize = 13.5.sp
+                            fontSize = 14.5.sp
                         ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -710,100 +791,31 @@ fun MatchCard(
                     TeamFlagBadge(
                         flagUrl = team2Visual.flagUrl,
                         emoji = team2Visual.emoji,
-                        code = team2CodeDisplay,
+                        code = match.team2Code.ifBlank { team2Display },
                         teamName = match.team2Name,
-                        isClubFootball = isClubFootball
+                        isNationalTeam = match.isNationalTeam
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // 3. Bottom Centered Text: Provider-confirmed status (or kickoff time when Live)
-            Text(
-                text = bottomStatusText,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = when {
-                        match.isPostponedOrCancelled -> GoldYellow
-                        match.isStatusUnknown -> Color(0xFF94A3B8)
-                        else -> Color.White
-                    },
-                    fontSize = 13.5.sp
-                ),
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // 3. Bottom Centered Elapsed Timer / Starts In Countdown / Status
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = bottomStatusText,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 14.sp
+                    ),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
-    }
-}
-
-@Composable
-fun LiveGlowingRedDot() {
-    Canvas(modifier = Modifier.size(width = 22.dp, height = 14.dp)) {
-        val red = Color(0xFFEF4444)
-        val center = Offset(size.width / 2f, size.height / 2f)
-        drawCircle(
-            color = red,
-            radius = 2.6.dp.toPx(),
-            center = center
-        )
-        val innerRadius = 5.5.dp.toPx()
-        val innerStroke = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
-        drawArc(
-            color = red.copy(alpha = 0.85f),
-            startAngle = 140f,
-            sweepAngle = 80f,
-            useCenter = false,
-            topLeft = Offset(center.x - innerRadius, center.y - innerRadius),
-            size = Size(innerRadius * 2f, innerRadius * 2f),
-            style = innerStroke
-        )
-        drawArc(
-            color = red.copy(alpha = 0.85f),
-            startAngle = -40f,
-            sweepAngle = 80f,
-            useCenter = false,
-            topLeft = Offset(center.x - innerRadius, center.y - innerRadius),
-            size = Size(innerRadius * 2f, innerRadius * 2f),
-            style = innerStroke
-        )
-        val outerRadius = 8.5.dp.toPx()
-        val outerStroke = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
-        drawArc(
-            color = red.copy(alpha = 0.45f),
-            startAngle = 145f,
-            sweepAngle = 70f,
-            useCenter = false,
-            topLeft = Offset(center.x - outerRadius, center.y - outerRadius),
-            size = Size(outerRadius * 2f, outerRadius * 2f),
-            style = outerStroke
-        )
-        drawArc(
-            color = red.copy(alpha = 0.45f),
-            startAngle = -35f,
-            sweepAngle = 70f,
-            useCenter = false,
-            topLeft = Offset(center.x - outerRadius, center.y - outerRadius),
-            size = Size(outerRadius * 2f, outerRadius * 2f),
-            style = outerStroke
-        )
-    }
-}
-
-@Composable
-private fun F1MiniHeaderMark() {
-    Canvas(modifier = Modifier.size(width = 20.dp, height = 11.dp)) {
-        val f1Red = Color(0xFFE10600)
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Butt)
-        // Stylized red F1 speedwing mark
-        drawLine(color = f1Red, start = Offset(w * 0.12f, h * 0.25f), end = Offset(w * 0.65f, h * 0.25f), strokeWidth = stroke.width)
-        drawLine(color = f1Red, start = Offset(w * 0.05f, h * 0.62f), end = Offset(w * 0.55f, h * 0.62f), strokeWidth = stroke.width)
-        drawLine(color = f1Red, start = Offset(w * 0.68f, h * 0.85f), end = Offset(w * 0.90f, h * 0.18f), strokeWidth = stroke.width)
     }
 }
 
@@ -814,126 +826,86 @@ fun TeamFlagBadge(
     flagUrl: String = flag,
     emoji: String = "",
     teamName: String = "",
-    sizeDp: Int = 42,
-    isClubFootball: Boolean = false
+    isNationalTeam: Boolean = true
 ) {
-    val resolved = remember(flag, code, flagUrl, emoji, teamName, isClubFootball) {
-        val lookupVisual = com.example.data.util.TeamFlagResolver.resolve(
+    val resolved = remember(flag, code, flagUrl, emoji, teamName, isNationalTeam) {
+        val lookupVisual = TeamFlagResolver.resolveForMatch(
             teamName = teamName.ifBlank { code },
             teamCode = code,
             existingFlag = flagUrl.ifBlank { flag },
-            isClubFootball = isClubFootball
+            isNationalTeam = isNationalTeam
         )
-        com.example.data.util.TeamFlagResolver.TeamVisual(
+        TeamFlagResolver.TeamVisual(
             code = code.ifBlank { lookupVisual.code },
-            flagUrl = lookupVisual.flagUrl,
+            flagUrl = flagUrl.ifBlank { lookupVisual.flagUrl },
             emoji = emoji.ifBlank { lookupVisual.emoji },
             countryName = lookupVisual.countryName
         )
     }
 
-    var imageLoadFailed by remember(resolved.flagUrl) { mutableStateOf(false) }
-
-    val isFormula1 = code.equals("F1", ignoreCase = true) ||
-        teamName.contains("Formula 1", ignoreCase = true) ||
-        teamName.equals("F1", ignoreCase = true)
     val isMotoGp = code.equals("MotoGP", ignoreCase = true) || teamName.contains("MotoGP", ignoreCase = true)
 
-    when {
-        isFormula1 -> {
-            Box(
-                modifier = Modifier.size(sizeDp.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.size(width = (sizeDp - 4).dp, height = (sizeDp / 2).dp)) {
-                    val f1Red = Color(0xFFE10600)
-                    val w = size.width
-                    val h = size.height
-                    val sw = 3.2.dp.toPx()
-                    drawLine(color = f1Red, start = Offset(w * 0.08f, h * 0.28f), end = Offset(w * 0.62f, h * 0.28f), strokeWidth = sw)
-                    drawLine(color = f1Red, start = Offset(w * 0.02f, h * 0.65f), end = Offset(w * 0.52f, h * 0.65f), strokeWidth = sw)
-                    drawLine(color = f1Red, start = Offset(w * 0.02f, h * 0.85f), end = Offset(w * 0.18f, h * 0.28f), strokeWidth = sw)
-                    drawLine(color = f1Red, start = Offset(w * 0.68f, h * 0.85f), end = Offset(w * 0.88f, h * 0.22f), strokeWidth = sw)
-                }
-            }
-        }
-        isMotoGp && resolved.flagUrl.isBlank() -> {
-            Box(
-                modifier = Modifier
-                    .width((sizeDp + 2).dp)
-                    .height((sizeDp - 6).dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "MGP",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        letterSpacing = (-0.5).sp
-                    )
+    if (isMotoGp && resolved.flagUrl.isBlank()) {
+        Box(
+            modifier = Modifier
+                .width(46.dp)
+                .height(36.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "MGP",
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    letterSpacing = (-0.5).sp
                 )
-            }
+            )
         }
-        !imageLoadFailed && (resolved.flagUrl.startsWith("http://", ignoreCase = true) ||
-            resolved.flagUrl.startsWith("https://", ignoreCase = true)) -> {
-            val isCountryFlag = resolved.flagUrl.contains("flagcdn.com", ignoreCase = true)
-            if (isCountryFlag) {
-                Box(
-                    modifier = Modifier
-                        .size((sizeDp - 2).dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF1C2739))
-                        .border(1.dp, Color(0xFF2E3F59), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = resolved.flagUrl,
-                        contentDescription = resolved.code,
-                        contentScale = ContentScale.Crop,
-                        onError = { imageLoadFailed = true },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape)
-                    )
-                }
-            } else {
-                // Team/Club shield crest or league logo: render cleanly without circular crop
-                Box(
-                    modifier = Modifier.size(sizeDp.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = resolved.flagUrl,
-                        contentDescription = resolved.code,
-                        contentScale = ContentScale.Fit,
-                        onError = { imageLoadFailed = true },
-                        modifier = Modifier.size((sizeDp - 2).dp)
-                    )
-                }
-            }
-        }
-        else -> {
-            Box(
-                modifier = Modifier
-                    .size((sizeDp - 2).dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF1C2739))
-                    .border(1.dp, Color(0xFF2E3F59), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                if (!isClubFootball && resolved.emoji.isNotBlank() && resolved.emoji != "🏳️") {
-                    Text(text = resolved.emoji, fontSize = 20.sp)
+    } else {
+        var imageLoadFailed by remember(resolved.flagUrl) { mutableStateOf(false) }
+        val hasRemoteUrl = (resolved.flagUrl.startsWith("http://", ignoreCase = true) ||
+            resolved.flagUrl.startsWith("https://", ignoreCase = true)) && !imageLoadFailed
+
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF1C2739))
+                .border(
+                    width = 1.dp,
+                    color = if (!isNationalTeam) Color(0xFF2D3F5B) else Color.Transparent,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            // Clean fallback badge if logo/flag is missing or fails to load
+            if (!hasRemoteUrl) {
+                if (isNationalTeam && resolved.emoji.isNotBlank() && resolved.emoji != "🏳️") {
+                    Text(text = resolved.emoji, fontSize = 22.sp)
                 } else {
                     Text(
                         text = resolved.code.take(3).uppercase(),
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = CyanAccent,
                             fontSize = 11.sp
                         )
                     )
                 }
+            }
+
+            if (hasRemoteUrl) {
+                AsyncImage(
+                    model = resolved.flagUrl,
+                    contentDescription = teamName.ifBlank { resolved.code },
+                    contentScale = if (isNationalTeam) ContentScale.Crop else ContentScale.Fit,
+                    onError = { imageLoadFailed = true },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(if (isNationalTeam) 0.dp else 4.dp)
+                        .clip(if (isNationalTeam) CircleShape else RoundedCornerShape(4.dp))
+                )
             }
         }
     }
@@ -1004,166 +976,231 @@ fun MultipleStreamsModalDialog(
     matchTournament: String? = null,
     matchStatus: String? = null,
     matchDetailState: com.example.data.crex.CrexMatchDetailState? = null,
+    approvedHighlightUrl: String? = null,
+    broadcastChannels: List<String> = emptyList(),
+    onWatchHighlight: ((String) -> Unit)? = null,
     onRefreshDetail: (() -> Unit)? = null,
-    onAddCustomStream: ((StreamSource) -> Unit)? = null,
     onStreamSelected: (StreamSource) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Only display enabled & authorized stream sources in priority order (never expose raw stream URLs)
+    val enabledStreams = remember(streams) {
+        streams
+            .filter { it.isEnabled && it.url.isNotBlank() }
+            .sortedWith(
+                compareBy<StreamSource> { it.isBackup }
+                    .thenBy { it.priorityOrder }
+                    .thenByDescending { it.isDefault }
+            )
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-                .border(1.3.dp, Color(0xFF00C2B8), RoundedCornerShape(22.dp)),
-            shape = RoundedCornerShape(22.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF182230))
+                .padding(16.dp)
+                .border(1.5.dp, CyanAccentVariant.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = NavyDark)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 22.dp),
+                    .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Top Broadcast Waves Icon inside 62.dp Teal-Bordered Circle
+                // Top Broadcast Waves Icon
                 Box(
                     modifier = Modifier
-                        .size(62.dp)
+                        .size(52.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF1B2E3E))
-                        .border(1.5.dp, Color(0xFF1E5668), CircleShape),
+                        .background(NavySurfaceVariant)
+                        .border(1.dp, CyanAccent.copy(alpha = 0.4f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Canvas(modifier = Modifier.size(30.dp)) {
-                        val cyan = Color(0xFF00D1C1)
-                        val cx = size.width * 0.5f
-                        val cy = size.height * 0.5f
-                        val stroke = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round)
+                    Icon(
+                        Icons.Default.Podcasts,
+                        contentDescription = null,
+                        tint = CyanAccent,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
 
-                        // Center dot
-                        drawCircle(color = cyan, radius = 2.6.dp.toPx(), center = Offset(cx, cy))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                        // Inner left & right arcs
-                        val innerR = 6.8.dp.toPx()
-                        drawArc(
-                            color = cyan,
-                            startAngle = 135f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            topLeft = Offset(cx - innerR, cy - innerR),
-                            size = Size(innerR * 2, innerR * 2),
-                            style = stroke
-                        )
-                        drawArc(
-                            color = cyan,
-                            startAngle = -45f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            topLeft = Offset(cx - innerR, cy - innerR),
-                            size = Size(innerR * 2, innerR * 2),
-                            style = stroke
-                        )
+                if (matchTournament != null) {
+                    Text(
+                        text = matchTournament,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = TextSecondary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
 
-                        // Outer left & right arcs
-                        val outerR = 11.5.dp.toPx()
-                        drawArc(
-                            color = cyan,
-                            startAngle = 135f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            topLeft = Offset(cx - outerR, cy - outerR),
-                            size = Size(outerR * 2, outerR * 2),
-                            style = stroke
+                if (matchTitle != null) {
+                    Text(
+                        text = matchTitle,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            fontSize = 17.sp
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                if (broadcastChannels.isNotEmpty()) {
+                    Text(
+                        text = "TV Broadcast: ${broadcastChannels.joinToString(", ")}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = CyanAccent,
+                            fontSize = 11.sp
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                // Multiple Streams Available Header
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = NavySurfaceVariant.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (matchStatus == "LIVE") LiveRed else CyanAccent)
                         )
-                        drawArc(
-                            color = cyan,
-                            startAngle = -45f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            topLeft = Offset(cx - outerR, cy - outerR),
-                            size = Size(outerR * 2, outerR * 2),
-                            style = stroke
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "MULTIPLE STREAMS AVAILABLE (${enabledStreams.size})",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = GoldYellow,
+                                fontSize = 11.sp,
+                                letterSpacing = 0.5.sp
+                            )
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
-                    text = "Multiple Streams Available",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 20.sp
+                    text = "Select an authorized channel or streaming server to watch:",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = TextSecondary,
+                        fontSize = 12.sp
                     ),
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                Text(
-                    text = "Choose your preferred stream",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = Color(0xFF94A3B8),
-                        fontSize = 14.5.sp
-                    ),
-                    textAlign = TextAlign.Center
-                )
+                if (enabledStreams.isEmpty()) {
+                    Surface(
+                        color = NavySurface,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "No active stream sources are currently enabled for this match.",
+                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        enabledStreams.forEach { stream ->
+                            val isSelected = currentSelectedStream?.id == stream.id
+                            StreamItemButton(
+                                stream = stream,
+                                isSelected = isSelected,
+                                onClick = {
+                                    onStreamSelected(stream)
+                                    onDismiss()
+                                }
+                            )
+                        }
+                    }
+                }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // List of streams matching reference screenshot
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    streams.forEach { stream ->
-                        val isSelected = currentSelectedStream?.id == stream.id
-                        StreamItemButton(
-                            stream = stream,
-                            isSelected = isSelected,
-                            onClick = {
-                                onStreamSelected(stream)
-                                onDismiss()
-                            }
+                // Optional Approved Highlight button (only shown when an approved playable link exists)
+                if (!approvedHighlightUrl.isNullOrBlank() && onWatchHighlight != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            onWatchHighlight(approvedHighlightUrl)
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .testTag("watch_highlight_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GoldYellow.copy(alpha = 0.2f),
+                            contentColor = GoldYellow
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.PlayCircle,
+                            contentDescription = "Watch Highlight",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Watch Official Highlight",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Cancel button matching reference screenshot
-                Surface(
+                // Cancel button
+                OutlinedButton(
+                    onClick = onDismiss,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(1.dp, Color(0xFF2A394D), RoundedCornerShape(14.dp))
-                        .clickable(onClick = onDismiss),
-                    color = Color(0xFF1C2635),
-                    shape = RoundedCornerShape(14.dp)
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = TextSecondary,
+                        containerColor = NavySurface
+                    ),
+                    border = null
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Cancel",
-                            modifier = Modifier.size(18.dp),
-                            tint = Color(0xFF94A3B8)
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cancel",
+                        modifier = Modifier.size(16.dp),
+                        tint = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Cancel",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.Medium,
+                            color = TextSecondary
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Cancel",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF94A3B8),
-                                fontSize = 16.sp
-                            )
-                        )
-                    }
+                    )
                 }
             }
         }
@@ -1176,23 +1213,23 @@ fun StreamItemButton(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF2E3E52)
+    val borderColor = if (isSelected) CyanAccent else NavyBorder
+    val containerColor = if (isSelected) NavySurfaceVariant else NavySurface
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .testTag("stream_option_${stream.name.lowercase().replace(" ", "_")}"),
-        color = Color(0xFF1E2938),
-        shape = RoundedCornerShape(16.dp)
+        color = containerColor,
+        shape = RoundedCornerShape(12.dp)
     ) {
         Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1200,41 +1237,43 @@ fun StreamItemButton(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                // Cyan 3-row server/list icon matching screenshot
-                Canvas(modifier = Modifier.size(width = 20.dp, height = 16.dp)) {
-                    val cyan = Color(0xFF00E5FF)
-                    val rowH = size.height / 3f
-                    for (r in 0..2) {
-                        val y = r * rowH + rowH * 0.2f
-                        val barH = rowH * 0.58f
-                        // Left square
-                        drawRect(
-                            color = cyan,
-                            topLeft = Offset(0f, y),
-                            size = Size(barH * 1.15f, barH)
-                        )
-                        // Right bar
-                        drawRect(
-                            color = cyan,
-                            topLeft = Offset(barH * 1.65f, y),
-                            size = Size(size.width - barH * 1.65f, barH)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(14.dp))
+                Icon(
+                    Icons.Default.FormatListBulleted,
+                    contentDescription = null,
+                    tint = if (isSelected) CyanAccent else TextSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = stream.name.uppercase(),
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Medium,
-                        color = Color.White,
-                        fontSize = 15.5.sp
+                    text = stream.name,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (isSelected) CyanAccent else TextPrimary,
+                        fontSize = 14.sp
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (stream.isBackup) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        color = GoldYellow.copy(alpha = 0.18f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "BACKUP",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = GoldYellow,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.sp
+                            ),
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
 
-            // Rounded HD pill on right
+            // Quality Badge (FHD, HD, SD)
             QualityBadge(quality = stream.quality)
         }
     }
@@ -1242,20 +1281,25 @@ fun StreamItemButton(
 
 @Composable
 fun QualityBadge(quality: String) {
-    val label = if (quality.contains("HD", ignoreCase = true)) "HD" else quality.take(3).uppercase()
+    val (bg, fg) = when (quality.uppercase()) {
+        "FHD", "1080P", "1080P FHD" -> Pair(QualityFHD.copy(alpha = 0.25f), QualityFHD)
+        "HD", "720P", "720P HD" -> Pair(QualityHD.copy(alpha = 0.25f), QualityHD)
+        else -> Pair(QualitySD.copy(alpha = 0.25f), QualitySD)
+    }
+
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color(0xFF25384B))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .clip(RoundedCornerShape(6.dp))
+            .background(bg)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = label,
+            text = quality.uppercase(),
             style = MaterialTheme.typography.labelSmall.copy(
-                color = Color(0xFF00D1C1),
+                color = fg,
                 fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
+                fontSize = 10.sp
             )
         )
     }

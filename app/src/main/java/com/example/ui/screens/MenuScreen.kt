@@ -154,6 +154,13 @@ fun MenuScreen(
                 onClick = onFloatingPlayerClick
             )
 
+            MenuItemCard(
+                icon = Icons.Default.AdminPanelSettings,
+                title = "Admin Control Panel",
+                subtitle = "ESPN/CREX sync, football leagues & stream manager",
+                onClick = onAdminPanelClick
+            )
+
             // Force Low Quality Toggle Card
             Card(
                 modifier = Modifier
@@ -220,13 +227,6 @@ fun MenuScreen(
                     )
                 }
             }
-
-            MenuItemCard(
-                icon = Icons.Default.AdminPanelSettings,
-                title = "Admin Control Panel",
-                subtitle = "Manage live streams, matches, channels & M3U8 checker",
-                onClick = onAdminPanelClick
-            )
         }
 
         Spacer(modifier = Modifier.height(28.dp))

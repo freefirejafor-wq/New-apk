@@ -18,6 +18,8 @@ val GoldYellow = Color(0xFFFBBF24)
 val TextPrimary = Color(0xFFF8FAFC)
 val TextSecondary = Color(0xFF94A3B8)
 val TextTertiary = Color(0xFF64748B)
+val TextMuted = Color(0xFF64748B)
+val WarningAmber = Color(0xFFF59E0B)
 
 val QualityFHD = Color(0xFF0284C7)
 val QualityHD = Color(0xFF059669)

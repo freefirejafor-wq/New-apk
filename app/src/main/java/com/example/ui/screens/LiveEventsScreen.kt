@@ -9,11 +9,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,10 +32,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.crex.CrexCricketService
 import com.example.data.crex.CrexDashboardState
 import com.example.data.model.LiveMatch
-import com.example.data.model.MatchDateFilter
 import com.example.data.model.MatchStatus
 import com.example.data.model.SportType
 import com.example.ui.components.MatchCard
@@ -52,33 +49,20 @@ fun LiveEventsScreen(
     onSportSelect: (SportType) -> Unit,
     selectedStatus: MatchStatus?,
     onStatusSelect: (MatchStatus?) -> Unit,
-    selectedDateFilter: MatchDateFilter? = null,
-    onDateFilterSelect: ((MatchDateFilter) -> Unit)? = null,
     onManualRefresh: () -> Unit = {},
     onMatchClick: (LiveMatch) -> Unit,
     onFavoriteToggle: (String) -> Unit,
-    onReminderToggle: (String) -> Unit = {},
     onStreamSelectClick: (LiveMatch) -> Unit,
     searchQuery: String = ""
 ) {
-    // Automatically keep Yesterday, Today, and Tomorrow matches in Asia/Dhaka (no extra date buttons in UI)
-    val dateFilteredMatches = remember(matches) {
-        val nowMs = System.currentTimeMillis()
+    val totalCount = matches.size
+    val cricketCount = remember(matches) { matches.count { it.sport == SportType.CRICKET } }
+    val footballCount = remember(matches) { matches.count { it.sport == SportType.FOOTBALL } }
+    val boxingCount = remember(matches) { matches.count { it.sport == SportType.BOXING } }
+    val racingCount = remember(matches) { matches.count { it.sport == SportType.RACING } }
+
+    val sportFilteredMatches = remember(matches, selectedSport, searchQuery) {
         matches.filter { match ->
-            CrexCricketService.isWithinDhakaThreeDayWindow(match, nowMs)
-        }
-    }
-
-    val totalCount = dateFilteredMatches.size
-    val cricketCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.CRICKET } }
-    val footballCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.FOOTBALL } }
-    val boxingCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.BOXING } }
-    val basketballCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.BASKETBALL } }
-    val racingCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.RACING } }
-    val hockeyCount = remember(dateFilteredMatches) { dateFilteredMatches.count { it.sport == SportType.HOCKEY } }
-
-    val sportFilteredMatches = remember(dateFilteredMatches, selectedSport, searchQuery) {
-        dateFilteredMatches.filter { match ->
             val sportMatches = when (selectedSport) {
                 SportType.ALL -> true
                 else -> match.sport == selectedSport
@@ -96,55 +80,48 @@ fun LiveEventsScreen(
 
     val allStatusCount = sportFilteredMatches.size
     val liveStatusCount = remember(sportFilteredMatches) {
-        sportFilteredMatches.count { it.isConfirmedLive }
+        sportFilteredMatches.count { it.status == MatchStatus.LIVE }
     }
     val upcomingStatusCount = remember(sportFilteredMatches) {
-        sportFilteredMatches.count {
-            it.status == MatchStatus.UPCOMING && !it.isPostponedOrCancelled && !it.isStatusUnknown
-        }
+        sportFilteredMatches.count { it.status == MatchStatus.UPCOMING || it.status == MatchStatus.UNKNOWN }
     }
     val finishedStatusCount = remember(sportFilteredMatches) {
-        sportFilteredMatches.count {
-            it.status == MatchStatus.FINISHED && !it.isPostponedOrCancelled && !it.isStatusUnknown
-        }
+        sportFilteredMatches.count { it.status == MatchStatus.FINISHED }
     }
 
     val filteredMatches = remember(sportFilteredMatches, selectedStatus) {
         when (selectedStatus) {
             null -> sportFilteredMatches
-            MatchStatus.LIVE -> sportFilteredMatches.filter { it.isConfirmedLive }
             MatchStatus.UPCOMING -> sportFilteredMatches.filter {
-                it.status == MatchStatus.UPCOMING && !it.isPostponedOrCancelled && !it.isStatusUnknown
+                it.status == MatchStatus.UPCOMING || it.status == MatchStatus.UNKNOWN
             }
-            MatchStatus.FINISHED -> sportFilteredMatches.filter {
-                it.status == MatchStatus.FINISHED && !it.isPostponedOrCancelled && !it.isStatusUnknown
-            }
+            else -> sportFilteredMatches.filter { it.status == selectedStatus }
         }
     }
 
-    val isProviderLoading = crexState.liveState.isLoading ||
+    val isCrexLoading = crexState.liveState.isLoading ||
         crexState.upcomingState.isLoading ||
-        crexState.finishedState.isLoading ||
-        crexState.footballState.isLoading
+        crexState.finishedState.isLoading
 
-    val hasProviderError = when (selectedSport) {
-        SportType.CRICKET -> crexState.liveState.errorMessage != null &&
-            crexState.upcomingState.errorMessage != null
-        SportType.FOOTBALL -> crexState.footballState.errorMessage != null
-        else -> (crexState.liveState.errorMessage != null && crexState.footballState.errorMessage != null)
+    val isServingStaleCache = remember(filteredMatches, crexState) {
+        filteredMatches.any { it.isStale } ||
+            crexState.liveState.isStale ||
+            crexState.upcomingState.isStale ||
+            crexState.finishedState.isStale
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0E1520))
+            .background(Color(0xFF0B111E))
+            .statusBarsPadding()
     ) {
-        // 1. Top Sport Selector Row (All, Cricket, Football, Boxing, Basketball, Motorsport, Hockey)
+        // 1. Top Sport Selector Row (All, Cricket, Football, Boxing, Motorsport) matching screenshot
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -191,17 +168,6 @@ fun LiveEventsScreen(
             )
 
             SportIconTopCard(
-                sportType = SportType.BASKETBALL,
-                badgeCount = basketballCount,
-                isSelected = selectedSport == SportType.BASKETBALL,
-                showTextLabel = false,
-                label = "Basketball",
-                onClick = {
-                    onSportSelect(if (selectedSport == SportType.BASKETBALL) SportType.ALL else SportType.BASKETBALL)
-                }
-            )
-
-            SportIconTopCard(
                 sportType = SportType.RACING,
                 badgeCount = racingCount,
                 isSelected = selectedSport == SportType.RACING,
@@ -211,22 +177,9 @@ fun LiveEventsScreen(
                     onSportSelect(if (selectedSport == SportType.RACING) SportType.ALL else SportType.RACING)
                 }
             )
-
-            if (hockeyCount > 0) {
-                SportIconTopCard(
-                    sportType = SportType.HOCKEY,
-                    badgeCount = hockeyCount,
-                    isSelected = selectedSport == SportType.HOCKEY,
-                    showTextLabel = false,
-                    label = "Hockey",
-                    onClick = {
-                        onSportSelect(if (selectedSport == SportType.HOCKEY) SportType.ALL else SportType.HOCKEY)
-                    }
-                )
-            }
         }
 
-        // 2. Status Filter Pills Row: All, Live, Upcoming, Finished
+        // 2. Status Filter Pills Row: All, Live, Upcoming, Finished (no extra date tabs)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -267,9 +220,40 @@ fun LiveEventsScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        if (isServingStaleCache) {
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "সর্বশেষ ক্যাশ করা ম্যাচ তালিকা দেখানো হচ্ছে (Showing cached feed)",
+                        style = MaterialTheme.typography.labelSmall.copy(color = GoldYellow),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = onManualRefresh,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text("Retry", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
 
-        // 3. Match Cards List (with Loading, Empty, and Error States)
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // 3. Match Cards List
         if (filteredMatches.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -277,66 +261,28 @@ fun LiveEventsScreen(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (isProviderLoading) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(
-                            color = Color(0xFF00D1C1),
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(38.dp)
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "Loading real-time matches...",
-                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
-                        )
-                    }
-                } else if (hasProviderError) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.CloudOff,
-                            contentDescription = null,
-                            tint = LiveRed,
-                            modifier = Modifier.size(36.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Match feed temporarily unavailable",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                color = TextPrimary,
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Please check your connection or try syncing again.",
-                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedButton(onClick = onManualRefresh) {
-                            Text("Retry Sync", color = CyanAccent)
-                        }
-                    }
+                if (isCrexLoading) {
+                    CircularProgressIndicator(
+                        color = Color(0xFF00D1C1),
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(38.dp)
+                    )
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "No Matches Found",
+                            text = "No Matches Found (Yesterday, Today, Tomorrow)",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 color = TextSecondary,
                                 fontWeight = FontWeight.SemiBold
                             ),
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "No active fixtures for the selected filter.",
-                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        OutlinedButton(onClick = onManualRefresh) {
-                            Text("Sync Live API Matches", color = CyanAccent)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onManualRefresh,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Sync Matches Now", color = CyanAccent)
                         }
                     }
                 }
@@ -345,19 +291,18 @@ fun LiveEventsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 10.dp),
                 contentPadding = PaddingValues(top = 2.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(
                     items = filteredMatches,
-                    key = { "${it.status}_${it.id}" }
+                    key = { "${it.sport.name}_${it.status}_${it.id}" }
                 ) { match ->
                     MatchCard(
                         match = match,
                         onClick = { onMatchClick(match) },
                         onFavoriteToggle = { onFavoriteToggle(match.id) },
-                        onReminderToggle = { onReminderToggle(match.id) },
                         onStreamSelectClick = { onStreamSelectClick(match) }
                     )
                 }
@@ -375,18 +320,18 @@ private fun SportIconTopCard(
     label: String,
     onClick: () -> Unit
 ) {
-    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF263449)
-    val borderWidth = if (isSelected) 1.5.dp else 1.3.dp
+    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF223147)
+    val borderWidth = if (isSelected) 1.6.dp else 1.2.dp
 
     Box(
         modifier = Modifier
-            .height(64.dp)
-            .width(if (showTextLabel) 104.dp else 72.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(Color(0xFF131C2B))
-            .border(borderWidth, borderColor, RoundedCornerShape(15.dp))
+            .height(68.dp)
+            .width(if (showTextLabel) 114.dp else 70.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF0E1624))
+            .border(borderWidth, borderColor, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("sport_chip_${label.lowercase()}"),
         contentAlignment = Alignment.Center
     ) {
@@ -403,21 +348,19 @@ private fun SportIconTopCard(
                     SportType.CRICKET -> CricketOutlineIcon()
                     SportType.FOOTBALL -> FootballOutlineIcon()
                     SportType.BOXING -> BoxingOutlineIcon()
-                    SportType.BASKETBALL -> BasketballOutlineIcon()
                     SportType.RACING -> RacingCarOutlineIcon()
-                    SportType.HOCKEY -> HockeyOutlineIcon()
                     else -> AllSportOutlineIcon()
                 }
 
-                // Red-orange circular/pill count badge with white border at top-left
+                // Red circular count badge with white border at top-left
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .offset(x = (-1).dp, y = (-1).dp)
-                        .defaultMinSize(minWidth = 20.dp, minHeight = 19.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color(0xFFF04438))
-                        .border(1.2.dp, Color.White, RoundedCornerShape(50))
+                        .offset(x = (-2).dp, y = (-2).dp)
+                        .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE53935))
+                        .border(1.2.dp, Color.White, CircleShape)
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -425,8 +368,8 @@ private fun SportIconTopCard(
                         text = badgeCount.toString(),
                         style = MaterialTheme.typography.labelSmall.copy(
                             color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 9.5.sp
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 10.sp
                         ),
                         maxLines = 1
                     )
@@ -434,13 +377,13 @@ private fun SportIconTopCard(
             }
 
             if (showTextLabel) {
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = label,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         color = Color.White,
                         fontWeight = FontWeight.Medium,
-                        fontSize = 13.5.sp
+                        fontSize = 14.sp
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -457,21 +400,21 @@ private fun StatusFilterPill(
     onClick: () -> Unit,
     tag: String
 ) {
-    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF263449)
-    val bgColor = if (isSelected) Color(0xFF132A38) else Color(0xFF131C2B)
+    val borderColor = if (isSelected) Color(0xFF00D1C1) else Color(0xFF233246)
+    val bgColor = if (isSelected) Color(0xFF152336) else Color(0xFF121B2A)
 
     Box(
         modifier = Modifier
-            .height(38.dp)
+            .height(42.dp)
             .clip(RoundedCornerShape(50))
             .background(bgColor)
             .border(
-                width = if (isSelected) 1.4.dp else 1.2.dp,
+                width = if (isSelected) 1.5.dp else 1.2.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(50)
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 18.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center
     ) {
@@ -484,7 +427,7 @@ private fun StatusFilterPill(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
@@ -493,7 +436,7 @@ private fun StatusFilterPill(
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                     color = Color.White,
-                    fontSize = 14.5.sp
+                    fontSize = 15.sp
                 ),
                 maxLines = 1
             )
@@ -508,8 +451,8 @@ private fun AllSportOutlineIcon() {
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
-            val r = size.minDimension * 0.43f
+            val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            val r = size.minDimension * 0.42f
             val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(
                 color = Color.White,
@@ -519,7 +462,7 @@ private fun AllSportOutlineIcon() {
             )
             drawCircle(
                 color = Color.White,
-                radius = r * 0.75f,
+                radius = r * 0.76f,
                 center = c,
                 style = Stroke(width = 1.5.dp.toPx())
             )
@@ -529,7 +472,7 @@ private fun AllSportOutlineIcon() {
             style = MaterialTheme.typography.labelSmall.copy(
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
-                fontSize = 8.5.sp
+                fontSize = 9.sp
             )
         )
     }
@@ -540,29 +483,29 @@ private fun CricketOutlineIcon() {
     Canvas(modifier = Modifier.size(44.dp)) {
         val w = size.width
         val h = size.height
-        val stroke = 1.8.dp.toPx()
+        val stroke = 2.dp.toPx()
 
-        // Three angled vertical stumps
-        drawLine(Color.White, Offset(w * 0.28f, h * 0.30f), Offset(w * 0.34f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.38f, h * 0.26f), Offset(w * 0.43f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.48f, h * 0.24f), Offset(w * 0.52f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+        // Three vertical stumps
+        drawLine(Color.White, Offset(w * 0.30f, h * 0.28f), Offset(w * 0.34f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.42f, h * 0.25f), Offset(w * 0.44f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.54f, h * 0.24f), Offset(w * 0.54f, h * 0.88f), strokeWidth = stroke, cap = StrokeCap.Round)
 
         // Bails on top
-        drawLine(Color.White, Offset(w * 0.26f, h * 0.27f), Offset(w * 0.52f, h * 0.21f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(Color.White, Offset(w * 0.28f, h * 0.26f), Offset(w * 0.56f, h * 0.22f), strokeWidth = stroke, cap = StrokeCap.Round)
 
         // Diagonal Cricket Bat on right
-        rotate(degrees = 20f, pivot = Offset(w * 0.66f, h * 0.55f)) {
+        rotate(degrees = 25f, pivot = Offset(w * 0.68f, h * 0.55f)) {
             drawRoundRect(
                 color = Color.White,
-                topLeft = Offset(w * 0.58f, h * 0.32f),
-                size = Size(w * 0.14f, h * 0.50f),
-                cornerRadius = CornerRadius(3f, 3f),
+                topLeft = Offset(w * 0.60f, h * 0.32f),
+                size = Size(w * 0.16f, h * 0.50f),
+                cornerRadius = CornerRadius(4f, 4f),
                 style = Stroke(width = stroke)
             )
             drawLine(
                 color = Color.White,
-                start = Offset(w * 0.65f, h * 0.12f),
-                end = Offset(w * 0.65f, h * 0.32f),
+                start = Offset(w * 0.68f, h * 0.12f),
+                end = Offset(w * 0.68f, h * 0.32f),
                 strokeWidth = stroke,
                 cap = StrokeCap.Round
             )
@@ -575,7 +518,7 @@ private fun FootballOutlineIcon() {
     Canvas(modifier = Modifier.size(44.dp)) {
         val w = size.width
         val h = size.height
-        val stroke = 1.7.dp.toPx()
+        val stroke = 1.8.dp.toPx()
         val c = Offset(w * 0.56f, h * 0.44f)
         val r = w * 0.32f
 
@@ -609,7 +552,7 @@ private fun BoxingOutlineIcon() {
     Canvas(modifier = Modifier.size(44.dp)) {
         val w = size.width
         val h = size.height
-        val stroke = 1.7.dp.toPx()
+        val stroke = 1.8.dp.toPx()
 
         // Left boxing glove
         rotate(degrees = -18f, pivot = Offset(w * 0.38f, h * 0.52f)) {
@@ -650,55 +593,11 @@ private fun BoxingOutlineIcon() {
 }
 
 @Composable
-private fun BasketballOutlineIcon() {
-    Canvas(modifier = Modifier.size(44.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.7.dp.toPx()
-
-        // Backboard rectangle
-        drawRoundRect(
-            color = Color.White,
-            topLeft = Offset(w * 0.16f, h * 0.26f),
-            size = Size(w * 0.62f, h * 0.42f),
-            cornerRadius = CornerRadius(4f, 4f),
-            style = Stroke(width = stroke)
-        )
-        // Inner backboard target box
-        drawRect(
-            color = Color.White,
-            topLeft = Offset(w * 0.34f, h * 0.42f),
-            size = Size(w * 0.26f, h * 0.20f),
-            style = Stroke(width = stroke * 0.85f)
-        )
-        // Basketball at top-right overlapping backboard
-        val ballCenter = Offset(w * 0.74f, h * 0.28f)
-        val ballRadius = w * 0.17f
-        drawCircle(color = Color(0xFF131C2B), radius = ballRadius, center = ballCenter)
-        drawCircle(color = Color.White, radius = ballRadius, center = ballCenter, style = Stroke(width = stroke))
-        drawLine(Color.White, Offset(ballCenter.x - ballRadius, ballCenter.y), Offset(ballCenter.x + ballRadius, ballCenter.y), strokeWidth = stroke * 0.8f)
-        drawLine(Color.White, Offset(ballCenter.x, ballCenter.y - ballRadius), Offset(ballCenter.x, ballCenter.y + ballRadius), strokeWidth = stroke * 0.8f)
-
-        // Hoop & Net below backboard
-        val netPath = Path().apply {
-            moveTo(w * 0.32f, h * 0.68f)
-            lineTo(w * 0.62f, h * 0.68f)
-            lineTo(w * 0.56f, h * 0.88f)
-            lineTo(w * 0.38f, h * 0.88f)
-            close()
-        }
-        drawPath(netPath, color = Color.White, style = Stroke(width = stroke * 0.9f))
-        drawLine(Color.White, Offset(w * 0.38f, h * 0.68f), Offset(w * 0.48f, h * 0.88f), strokeWidth = stroke * 0.7f)
-        drawLine(Color.White, Offset(w * 0.56f, h * 0.68f), Offset(w * 0.44f, h * 0.88f), strokeWidth = stroke * 0.7f)
-    }
-}
-
-@Composable
 private fun RacingCarOutlineIcon() {
     Canvas(modifier = Modifier.size(44.dp)) {
         val w = size.width
         val h = size.height
-        val stroke = 1.7.dp.toPx()
+        val stroke = 1.8.dp.toPx()
 
         // Race car chassis body
         val bodyPath = Path().apply {
@@ -714,33 +613,9 @@ private fun RacingCarOutlineIcon() {
         drawPath(bodyPath, color = Color.White, style = Stroke(width = stroke))
 
         // Left & right wheels
-        drawCircle(color = Color(0xFF131C2B), radius = w * 0.12f, center = Offset(w * 0.26f, h * 0.66f))
+        drawCircle(color = Color(0xFF0E1624), radius = w * 0.12f, center = Offset(w * 0.26f, h * 0.66f))
         drawCircle(color = Color.White, radius = w * 0.12f, center = Offset(w * 0.26f, h * 0.66f), style = Stroke(width = stroke))
-        drawCircle(color = Color(0xFF131C2B), radius = w * 0.12f, center = Offset(w * 0.74f, h * 0.66f))
+        drawCircle(color = Color(0xFF0E1624), radius = w * 0.12f, center = Offset(w * 0.74f, h * 0.66f))
         drawCircle(color = Color.White, radius = w * 0.12f, center = Offset(w * 0.74f, h * 0.66f), style = Stroke(width = stroke))
-    }
-}
-
-@Composable
-private fun HockeyOutlineIcon() {
-    Canvas(modifier = Modifier.size(44.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.8.dp.toPx()
-
-        // Crossed hockey sticks
-        drawLine(Color.White, Offset(w * 0.22f, h * 0.22f), Offset(w * 0.74f, h * 0.78f), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.74f, h * 0.78f), Offset(w * 0.86f, h * 0.74f), strokeWidth = stroke * 1.2f, cap = StrokeCap.Round)
-
-        drawLine(Color.White, Offset(w * 0.78f, h * 0.22f), Offset(w * 0.26f, h * 0.78f), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.26f, h * 0.78f), Offset(w * 0.14f, h * 0.74f), strokeWidth = stroke * 1.2f, cap = StrokeCap.Round)
-
-        // Hockey puck at bottom center
-        drawOval(
-            color = Color.White,
-            topLeft = Offset(w * 0.38f, h * 0.78f),
-            size = Size(w * 0.24f, h * 0.10f),
-            style = Stroke(width = stroke)
-        )
     }
 }

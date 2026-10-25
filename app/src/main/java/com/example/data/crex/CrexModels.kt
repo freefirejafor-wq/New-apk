@@ -12,7 +12,6 @@ data class CrexCategoryFeedState(
     val matches: List<LiveMatch> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-    val httpStatusCode: Int = 200,
     val isStale: Boolean = false,
     val lastUpdatedEpochMs: Long? = null,
     val lastUpdatedDhakaText: String? = null,
@@ -20,28 +19,12 @@ data class CrexCategoryFeedState(
 )
 
 /**
- * State container for the separate Football provider (ESPN Soccer Scoreboard API),
- * tracking loading, HTTP status (e.g. 403/500), stale cache status, and last sync time.
- */
-data class FootballProviderState(
-    val matches: List<LiveMatch> = emptyList(),
-    val isLoading: Boolean = false,
-    val errorMessage: String? = null,
-    val httpStatusCode: Int = 200,
-    val isStale: Boolean = false,
-    val lastUpdatedEpochMs: Long? = null,
-    val lastUpdatedDhakaText: String? = null,
-    val activeLeagues: List<String> = emptyList()
-)
-
-/**
- * Combined UI state for the CREX cricket integration and Football provider.
+ * Combined UI state for the CREX cricket integration across all categories.
  */
 data class CrexDashboardState(
     val liveState: CrexCategoryFeedState = CrexCategoryFeedState(category = MatchStatus.LIVE, isLoading = true),
     val upcomingState: CrexCategoryFeedState = CrexCategoryFeedState(category = MatchStatus.UPCOMING, isLoading = true),
     val finishedState: CrexCategoryFeedState = CrexCategoryFeedState(category = MatchStatus.FINISHED, isLoading = false),
-    val footballState: FootballProviderState = FootballProviderState(isLoading = true),
     val activeDetailState: CrexMatchDetailState = CrexMatchDetailState()
 ) {
     fun stateFor(status: MatchStatus?): CrexCategoryFeedState {
@@ -49,24 +32,22 @@ data class CrexDashboardState(
             MatchStatus.LIVE -> liveState
             MatchStatus.UPCOMING -> upcomingState
             MatchStatus.FINISHED -> finishedState
-            null -> {
-                val combined = liveState.matches + upcomingState.matches + finishedState.matches
-                val anyLoading = (liveState.isLoading || upcomingState.isLoading || footballState.isLoading) &&
-                    combined.isEmpty() && footballState.matches.isEmpty()
-                val anyStale = liveState.isStale || upcomingState.isStale || finishedState.isStale || footballState.isStale
+            MatchStatus.UNKNOWN, null -> {
+                val combined = (liveState.matches + upcomingState.matches + finishedState.matches)
+                    .distinctBy { it.id }
+                val anyLoading = (liveState.isLoading || upcomingState.isLoading) && combined.isEmpty()
+                val anyStale = liveState.isStale || upcomingState.isStale || finishedState.isStale
                 val latestUpdate = listOfNotNull(
                     liveState.lastUpdatedEpochMs,
                     upcomingState.lastUpdatedEpochMs,
-                    finishedState.lastUpdatedEpochMs,
-                    footballState.lastUpdatedEpochMs
+                    finishedState.lastUpdatedEpochMs
                 ).maxOrNull()
                 val latestText = listOfNotNull(
                     liveState.lastUpdatedDhakaText,
                     upcomingState.lastUpdatedDhakaText,
-                    finishedState.lastUpdatedDhakaText,
-                    footballState.lastUpdatedDhakaText
+                    finishedState.lastUpdatedDhakaText
                 ).firstOrNull()
-                val err = liveState.errorMessage ?: upcomingState.errorMessage ?: finishedState.errorMessage ?: footballState.errorMessage
+                val err = liveState.errorMessage ?: upcomingState.errorMessage ?: finishedState.errorMessage
                 CrexCategoryFeedState(
                     category = MatchStatus.LIVE,
                     matches = combined,

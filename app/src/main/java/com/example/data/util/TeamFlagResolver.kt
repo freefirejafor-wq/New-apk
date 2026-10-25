@@ -1,62 +1,56 @@
 package com.example.data.util
 
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+
 /**
- * Resolves high-resolution flag image URLs (via FlagCDN or official crest URLs),
- * country flag emojis, and standardized 3-letter codes for
- * International Cricket, Associate Nations, Domestic/Franchise Cricket,
- * International Football, Club Football, Boxing, and Motorsport.
+ * Resolves high-resolution flag image URLs (via FlagCDN),
+ * country flag emojis, and standardized 3-letter codes for Senior National Teams,
+ * while strictly preserving Club Crests/Logos (and never substituting national flags)
+ * for Club Football matches.
  */
 object TeamFlagResolver {
+
+    val DHAKA_TIMEZONE: TimeZone = TimeZone.getTimeZone("Asia/Dhaka")
 
     data class TeamVisual(
         val code: String,
         val flagUrl: String,
         val emoji: String,
-        val countryName: String
+        val countryName: String,
+        val isNationalFlag: Boolean = true
     )
 
-    // Regex to reject non-senior matches (U17/U18, youth, academy, reserve, B-team, etc.)
-    private val nonSeniorRegex = Regex(
-        """\b(u-?14|u-?15|u-?16|u-?17|u-?18|u-?19|u-?20|u-?21|u-?22|u-?23|under[-\s]?\d+|sub[-\s]?\d+|youth|junior|juniors|juvenil|primavera|cadete|infantil|emerging|academy|academies|reserve|reserves|reserva|reservas|b-team|b\s+team|team\s+b|c-team|team\s+c|castilla|next\s+gen|futuro|jong|pl2|premier\s+league\s+2|development|eds)\b""",
+    // Regex to reject any Under-17, Under-18, Under-19, Under-20, Under-21, Under-23, Youth,
+    // Academy, Reserve, B-team, Amateur, Grassroots, Virtual, or Esports matches.
+    private val youthOrReserveRegex = Regex(
+        """(\b(u-?15|u-?16|u-?17|u-?18|u-?19|u-?20|u-?21|u-?22|u-?23|under[-\s]?\d+|youth|junior|juvenil|primavera|emerging|academy|reserve|reserves|b-team|amateur|grassroots|virtual|esports|e-sports|esoccer|cyber)\b|\b(india a|bangladesh a|pakistan a|sri lanka a|australia a|england a|south africa a|new zealand a|west indies a|afghanistan a|zimbabwe a|ireland a|nepal a|england lions|board xi|president's xi|pm xi)\b|\s+ii\b|\s+b\b)""",
         RegexOption.IGNORE_CASE
     )
 
-    private val reserveOrBTeamSuffixRegex = Regex(
-        """(?:\s+(?:II|III|B|C|U-?\d+|Reserves?|Academy|Youth|Junior|EDS)|^Jong\s+.+)$""",
+    // Regex to reject domestic/franchise cricket tournaments so Cricket stays strictly International
+    private val domesticOrFranchiseCricketRegex = Regex(
+        """\b(ranji|duleep|irani|vijay hazare|syed mushtaq|deodhar|county|sheffield|plunket|ford trophy|marsh cup|one-day cup|vitality blast|the hundred|wpl|wbbl|ipl|bpl|psl|cpl|bbl|sa20|ilt20|lpl|mlc|pro20|super smash|t10|abu dhabi t10|emirates d10|emirates d20|ecs|european cricket|premier league|trophy|division|shield|legends|masters|veterans|women's big bash)\b""",
         RegexOption.IGNORE_CASE
     )
 
-    // Comprehensive map of National Teams, Associate Cricket Teams, Women/U19/A variants, Domestic & Franchise Teams, and Football Clubs
+    // Senior National Main Teams (International Cricket & International Football)
     private val nationalTeamMap: Map<String, TeamVisual> = mapOf(
-        // Asian National & Associate Teams
+        // Asian National Teams
         "bangladesh" to TeamVisual("BAN", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh"),
         "ban" to TeamVisual("BAN", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh"),
         "bd" to TeamVisual("BAN", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh"),
-        "bangladesh women" to TeamVisual("BAN-W", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh Women"),
-        "ban-w" to TeamVisual("BAN-W", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh Women"),
-        "bangladesh u19" to TeamVisual("BAN-U19", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh U19"),
-        "bangladesh a" to TeamVisual("BAN-A", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Bangladesh A"),
         "india" to TeamVisual("IND", "https://flagcdn.com/w160/in.png", "🇮🇳", "India"),
         "ind" to TeamVisual("IND", "https://flagcdn.com/w160/in.png", "🇮🇳", "India"),
-        "india women" to TeamVisual("IND-W", "https://flagcdn.com/w160/in.png", "🇮🇳", "India Women"),
-        "ind-w" to TeamVisual("IND-W", "https://flagcdn.com/w160/in.png", "🇮🇳", "India Women"),
-        "india a" to TeamVisual("IND-A", "https://flagcdn.com/w160/in.png", "🇮🇳", "India A"),
-        "india u19" to TeamVisual("IND-U19", "https://flagcdn.com/w160/in.png", "🇮🇳", "India U19"),
         "pakistan" to TeamVisual("PAK", "https://flagcdn.com/w160/pk.png", "🇵🇰", "Pakistan"),
         "pak" to TeamVisual("PAK", "https://flagcdn.com/w160/pk.png", "🇵🇰", "Pakistan"),
-        "pakistan women" to TeamVisual("PAK-W", "https://flagcdn.com/w160/pk.png", "🇵🇰", "Pakistan Women"),
-        "pak-w" to TeamVisual("PAK-W", "https://flagcdn.com/w160/pk.png", "🇵🇰", "Pakistan Women"),
-        "pakistan a" to TeamVisual("PAK-A", "https://flagcdn.com/w160/pk.png", "🇵🇰", "Pakistan A"),
         "sri lanka" to TeamVisual("SL", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka"),
         "sl" to TeamVisual("SL", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka"),
         "sri" to TeamVisual("SL", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka"),
-        "sri lanka women" to TeamVisual("SL-W", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka Women"),
-        "sl-w" to TeamVisual("SL-W", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka Women"),
-        "sri lanka a" to TeamVisual("SL-A", "https://flagcdn.com/w160/lk.png", "🇱🇰", "Sri Lanka A"),
         "afghanistan" to TeamVisual("AFG", "https://flagcdn.com/w160/af.png", "🇦🇫", "Afghanistan"),
         "afg" to TeamVisual("AFG", "https://flagcdn.com/w160/af.png", "🇦🇫", "Afghanistan"),
-        "afghanistan a" to TeamVisual("AFG-A", "https://flagcdn.com/w160/af.png", "🇦🇫", "Afghanistan A"),
-        "afghanistan u19" to TeamVisual("AFG-U19", "https://flagcdn.com/w160/af.png", "🇦🇫", "Afghanistan U19"),
         "nepal" to TeamVisual("NEP", "https://flagcdn.com/w160/np.png", "🇳🇵", "Nepal"),
         "nep" to TeamVisual("NEP", "https://flagcdn.com/w160/np.png", "🇳🇵", "Nepal"),
         "japan" to TeamVisual("JPN", "https://flagcdn.com/w160/jp.png", "🇯🇵", "Japan"),
@@ -68,6 +62,8 @@ object TeamFlagResolver {
         "ksa" to TeamVisual("KSA", "https://flagcdn.com/w160/sa.png", "🇸🇦", "Saudi Arabia"),
         "qatar" to TeamVisual("QAT", "https://flagcdn.com/w160/qa.png", "🇶🇦", "Qatar"),
         "qat" to TeamVisual("QAT", "https://flagcdn.com/w160/qa.png", "🇶🇦", "Qatar"),
+        "kuwait" to TeamVisual("KUW", "https://flagcdn.com/w160/kw.png", "🇰🇼", "Kuwait"),
+        "kuw" to TeamVisual("KUW", "https://flagcdn.com/w160/kw.png", "🇰🇼", "Kuwait"),
         "uae" to TeamVisual("UAE", "https://flagcdn.com/w160/ae.png", "🇦🇪", "United Arab Emirates"),
         "united arab emirates" to TeamVisual("UAE", "https://flagcdn.com/w160/ae.png", "🇦🇪", "United Arab Emirates"),
         "iran" to TeamVisual("IRN", "https://flagcdn.com/w160/ir.png", "🇮🇷", "Iran"),
@@ -77,60 +73,37 @@ object TeamFlagResolver {
         "oman" to TeamVisual("OMA", "https://flagcdn.com/w160/om.png", "🇴🇲", "Oman"),
         "oma" to TeamVisual("OMA", "https://flagcdn.com/w160/om.png", "🇴🇲", "Oman"),
         "bahrain" to TeamVisual("BHR", "https://flagcdn.com/w160/bh.png", "🇧🇭", "Bahrain"),
-        "bhr" to TeamVisual("BHR", "https://flagcdn.com/w160/bh.png", "🇧🇭", "Bahrain"),
-        "kuwait" to TeamVisual("KUW", "https://flagcdn.com/w160/kw.png", "🇰🇼", "Kuwait"),
-        "kuw" to TeamVisual("KUW", "https://flagcdn.com/w160/kw.png", "🇰🇼", "Kuwait"),
         "jordan" to TeamVisual("JOR", "https://flagcdn.com/w160/jo.png", "🇯🇴", "Jordan"),
         "china" to TeamVisual("CHN", "https://flagcdn.com/w160/cn.png", "🇨🇳", "China"),
         "indonesia" to TeamVisual("IDN", "https://flagcdn.com/w160/id.png", "🇮🇩", "Indonesia"),
         "malaysia" to TeamVisual("MAS", "https://flagcdn.com/w160/my.png", "🇲🇾", "Malaysia"),
-        "mas" to TeamVisual("MAS", "https://flagcdn.com/w160/my.png", "🇲🇾", "Malaysia"),
-        "singapore" to TeamVisual("SGP", "https://flagcdn.com/w160/sg.png", "🇸🇬", "Singapore"),
-        "sgp" to TeamVisual("SGP", "https://flagcdn.com/w160/sg.png", "🇸🇬", "Singapore"),
         "thailand" to TeamVisual("THA", "https://flagcdn.com/w160/th.png", "🇹🇭", "Thailand"),
         "hong kong" to TeamVisual("HKG", "https://flagcdn.com/w160/hk.png", "🇭🇰", "Hong Kong"),
-        "hkg" to TeamVisual("HKG", "https://flagcdn.com/w160/hk.png", "🇭🇰", "Hong Kong"),
-        "bhutan" to TeamVisual("BHU", "https://flagcdn.com/w160/bt.png", "🇧🇹", "Bhutan"),
-        "maldives" to TeamVisual("MDV", "https://flagcdn.com/w160/mv.png", "🇲🇻", "Maldives"),
-        "myanmar" to TeamVisual("MYA", "https://flagcdn.com/w160/mm.png", "🇲🇲", "Myanmar"),
-        "cambodia" to TeamVisual("CAM", "https://flagcdn.com/w160/kh.png", "🇰🇭", "Cambodia"),
+        "singapore" to TeamVisual("SGP", "https://flagcdn.com/w160/sg.png", "🇸🇬", "Singapore"),
 
         // Oceania National Teams
         "australia" to TeamVisual("AUS", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia"),
         "aus" to TeamVisual("AUS", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia"),
-        "australia women" to TeamVisual("AUS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia Women"),
-        "aus-w" to TeamVisual("AUS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia Women"),
-        "australia a" to TeamVisual("AUS-A", "https://flagcdn.com/w160/au.png", "🇦🇺", "Australia A"),
         "new zealand" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
         "nz" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
-        "new zealand women" to TeamVisual("NZ-W", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand Women"),
-        "nz-w" to TeamVisual("NZ-W", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand Women"),
         "nzl" to TeamVisual("NZ", "https://flagcdn.com/w160/nz.png", "🇳🇿", "New Zealand"),
         "papua new guinea" to TeamVisual("PNG", "https://flagcdn.com/w160/pg.png", "🇵🇬", "Papua New Guinea"),
         "png" to TeamVisual("PNG", "https://flagcdn.com/w160/pg.png", "🇵🇬", "Papua New Guinea"),
-        "vanuatu" to TeamVisual("VAN", "https://flagcdn.com/w160/vu.png", "🇻🇺", "Vanuatu"),
-        "fiji" to TeamVisual("FIJ", "https://flagcdn.com/w160/fj.png", "🇫🇯", "Fiji"),
-        "samoa" to TeamVisual("SAM", "https://flagcdn.com/w160/ws.png", "🇼🇸", "Samoa"),
 
         // European National Teams
         "england" to TeamVisual("ENG", "https://flagcdn.com/w160/gb-eng.png", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England"),
         "eng" to TeamVisual("ENG", "https://flagcdn.com/w160/gb-eng.png", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England"),
-        "england women" to TeamVisual("ENG-W", "https://flagcdn.com/w160/gb-eng.png", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England Women"),
-        "eng-w" to TeamVisual("ENG-W", "https://flagcdn.com/w160/gb-eng.png", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England Women"),
-        "england lions" to TeamVisual("ENG-A", "https://flagcdn.com/w160/gb-eng.png", "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England Lions"),
-        "united kingdom" to TeamVisual("UK", "https://flagcdn.com/w160/gb.png", "🇬🇧", "United Kingdom"),
-        "great britain" to TeamVisual("GBR", "https://flagcdn.com/w160/gb.png", "🇬🇧", "Great Britain"),
         "scotland" to TeamVisual("SCO", "https://flagcdn.com/w160/gb-sct.png", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Scotland"),
         "sco" to TeamVisual("SCO", "https://flagcdn.com/w160/gb-sct.png", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Scotland"),
         "wales" to TeamVisual("WAL", "https://flagcdn.com/w160/gb-wls.png", "🏴󠁧󠁢󠁷󠁬󠁳󠁿", "Wales"),
         "wal" to TeamVisual("WAL", "https://flagcdn.com/w160/gb-wls.png", "🏴󠁧󠁢󠁷󠁬󠁳󠁿", "Wales"),
+        "northern ireland" to TeamVisual("NIR", "https://flagcdn.com/w160/gb-nir.png", "🇬🇧", "Northern Ireland"),
         "ireland" to TeamVisual("IRE", "https://flagcdn.com/w160/ie.png", "🇮🇪", "Ireland"),
         "republic of ireland" to TeamVisual("IRE", "https://flagcdn.com/w160/ie.png", "🇮🇪", "Ireland"),
         "ire" to TeamVisual("IRE", "https://flagcdn.com/w160/ie.png", "🇮🇪", "Ireland"),
         "irl" to TeamVisual("IRE", "https://flagcdn.com/w160/ie.png", "🇮🇪", "Ireland"),
-        "ireland women" to TeamVisual("IRE-W", "https://flagcdn.com/w160/ie.png", "🇮🇪", "Ireland Women"),
         "jersey" to TeamVisual("JER", "https://flagcdn.com/w160/je.png", "🇯🇪", "Jersey"),
-        "guernsey" to TeamVisual("GUE", "https://flagcdn.com/w160/gg.png", "🇬🇬", "Guernsey"),
+        "jer" to TeamVisual("JER", "https://flagcdn.com/w160/je.png", "🇯🇪", "Jersey"),
         "france" to TeamVisual("FRA", "https://flagcdn.com/w160/fr.png", "🇫🇷", "France"),
         "fra" to TeamVisual("FRA", "https://flagcdn.com/w160/fr.png", "🇫🇷", "France"),
         "spain" to TeamVisual("ESP", "https://flagcdn.com/w160/es.png", "🇪🇸", "Spain"),
@@ -173,6 +146,15 @@ object TeamFlagResolver {
         "romania" to TeamVisual("ROU", "https://flagcdn.com/w160/ro.png", "🇷🇴", "Romania"),
         "slovakia" to TeamVisual("SVK", "https://flagcdn.com/w160/sk.png", "🇸🇰", "Slovakia"),
         "slovenia" to TeamVisual("SVN", "https://flagcdn.com/w160/si.png", "🇸🇮", "Slovenia"),
+        "finland" to TeamVisual("FIN", "https://flagcdn.com/w160/fi.png", "🇫🇮", "Finland"),
+        "iceland" to TeamVisual("ISL", "https://flagcdn.com/w160/is.png", "🇮🇸", "Iceland"),
+        "georgia" to TeamVisual("GEO", "https://flagcdn.com/w160/ge.png", "🇬🇪", "Georgia"),
+        "albania" to TeamVisual("ALB", "https://flagcdn.com/w160/al.png", "🇦🇱", "Albania"),
+        "bosnia and herzegovina" to TeamVisual("BIH", "https://flagcdn.com/w160/ba.png", "🇧🇦", "Bosnia and Herzegovina"),
+        "north macedonia" to TeamVisual("MKD", "https://flagcdn.com/w160/mk.png", "🇲🇰", "North Macedonia"),
+        "montenegro" to TeamVisual("MNE", "https://flagcdn.com/w160/me.png", "🇲🇪", "Montenegro"),
+        "israel" to TeamVisual("ISR", "https://flagcdn.com/w160/il.png", "🇮🇱", "Israel"),
+        "bulgaria" to TeamVisual("BUL", "https://flagcdn.com/w160/bg.png", "🇧🇬", "Bulgaria"),
 
         // South & North American National Teams
         "argentina" to TeamVisual("ARG", "https://flagcdn.com/w160/ar.png", "🇦🇷", "Argentina"),
@@ -204,240 +186,213 @@ object TeamFlagResolver {
         "west indies" to TeamVisual("WI", "https://flagcdn.com/w160/jm.png", "🌴", "West Indies"),
         "wi" to TeamVisual("WI", "https://flagcdn.com/w160/jm.png", "🌴", "West Indies"),
         "windies" to TeamVisual("WI", "https://flagcdn.com/w160/jm.png", "🌴", "West Indies"),
-        "west indies women" to TeamVisual("WI-W", "https://flagcdn.com/w160/jm.png", "🌴", "West Indies Women"),
-        "wi-w" to TeamVisual("WI-W", "https://flagcdn.com/w160/jm.png", "🌴", "West Indies Women"),
-        "bermuda" to TeamVisual("BER", "https://flagcdn.com/w160/bm.png", "🇧🇲", "Bermuda"),
         "costa rica" to TeamVisual("CRC", "https://flagcdn.com/w160/cr.png", "🇨🇷", "Costa Rica"),
         "panama" to TeamVisual("PAN", "https://flagcdn.com/w160/pa.png", "🇵🇦", "Panama"),
         "jamaica" to TeamVisual("JAM", "https://flagcdn.com/w160/jm.png", "🇯🇲", "Jamaica"),
+        "honduras" to TeamVisual("HON", "https://flagcdn.com/w160/hn.png", "🇭🇳", "Honduras"),
 
         // African National Teams
         "south africa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
         "sa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
         "rsa" to TeamVisual("SA", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa"),
-        "south africa women" to TeamVisual("SA-W", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa Women"),
-        "sa-w" to TeamVisual("SA-W", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa Women"),
-        "south africa a" to TeamVisual("SA-A", "https://flagcdn.com/w160/za.png", "🇿🇦", "South Africa A"),
         "zimbabwe" to TeamVisual("ZIM", "https://flagcdn.com/w160/zw.png", "🇿🇼", "Zimbabwe"),
         "zim" to TeamVisual("ZIM", "https://flagcdn.com/w160/zw.png", "🇿🇼", "Zimbabwe"),
-        "zimbabwe women" to TeamVisual("ZIM-W", "https://flagcdn.com/w160/zw.png", "🇿🇼", "Zimbabwe Women"),
         "namibia" to TeamVisual("NAM", "https://flagcdn.com/w160/na.png", "🇳🇦", "Namibia"),
         "nam" to TeamVisual("NAM", "https://flagcdn.com/w160/na.png", "🇳🇦", "Namibia"),
         "uganda" to TeamVisual("UGA", "https://flagcdn.com/w160/ug.png", "🇺🇬", "Uganda"),
         "uga" to TeamVisual("UGA", "https://flagcdn.com/w160/ug.png", "🇺🇬", "Uganda"),
         "kenya" to TeamVisual("KEN", "https://flagcdn.com/w160/ke.png", "🇰🇪", "Kenya"),
         "ken" to TeamVisual("KEN", "https://flagcdn.com/w160/ke.png", "🇰🇪", "Kenya"),
-        "tanzania" to TeamVisual("TAN", "https://flagcdn.com/w160/tz.png", "🇹🇿", "Tanzania"),
-        "rwanda" to TeamVisual("RWA", "https://flagcdn.com/w160/rw.png", "🇷🇼", "Rwanda"),
-        "malawi" to TeamVisual("MWI", "https://flagcdn.com/w160/mw.png", "🇲🇼", "Malawi"),
-        "botswana" to TeamVisual("BOT", "https://flagcdn.com/w160/bw.png", "🇧🇼", "Botswana"),
+        "nigeria" to TeamVisual("NGA", "https://flagcdn.com/w160/ng.png", "🇳🇬", "Nigeria"),
+        "nga" to TeamVisual("NGA", "https://flagcdn.com/w160/ng.png", "🇳🇬", "Nigeria"),
+        "zambia" to TeamVisual("ZAM", "https://flagcdn.com/w160/zm.png", "🇿🇲", "Zambia"),
+        "zam" to TeamVisual("ZAM", "https://flagcdn.com/w160/zm.png", "🇿🇲", "Zambia"),
         "lesotho" to TeamVisual("LES", "https://flagcdn.com/w160/ls.png", "🇱🇸", "Lesotho"),
         "mozambique" to TeamVisual("MOZ", "https://flagcdn.com/w160/mz.png", "🇲🇿", "Mozambique"),
         "gambia" to TeamVisual("GAM", "https://flagcdn.com/w160/gm.png", "🇬🇲", "Gambia"),
-        "sierra leone" to TeamVisual("SLE", "https://flagcdn.com/w160/sl.png", "🇸🇱", "Sierra Leone"),
+        "rwanda" to TeamVisual("RWA", "https://flagcdn.com/w160/rw.png", "🇷🇼", "Rwanda"),
+        "tanzania" to TeamVisual("TAN", "https://flagcdn.com/w160/tz.png", "🇹🇿", "Tanzania"),
         "morocco" to TeamVisual("MAR", "https://flagcdn.com/w160/ma.png", "🇲🇦", "Morocco"),
         "mar" to TeamVisual("MAR", "https://flagcdn.com/w160/ma.png", "🇲🇦", "Morocco"),
         "senegal" to TeamVisual("SEN", "https://flagcdn.com/w160/sn.png", "🇸🇳", "Senegal"),
         "sen" to TeamVisual("SEN", "https://flagcdn.com/w160/sn.png", "🇸🇳", "Senegal"),
         "egypt" to TeamVisual("EGY", "https://flagcdn.com/w160/eg.png", "🇪🇬", "Egypt"),
         "egy" to TeamVisual("EGY", "https://flagcdn.com/w160/eg.png", "🇪🇬", "Egypt"),
-        "nigeria" to TeamVisual("NGA", "https://flagcdn.com/w160/ng.png", "🇳🇬", "Nigeria"),
-        "nga" to TeamVisual("NGA", "https://flagcdn.com/w160/ng.png", "🇳🇬", "Nigeria"),
         "ghana" to TeamVisual("GHA", "https://flagcdn.com/w160/gh.png", "🇬🇭", "Ghana"),
         "cameroon" to TeamVisual("CMR", "https://flagcdn.com/w160/cm.png", "🇨🇲", "Cameroon"),
         "algeria" to TeamVisual("ALG", "https://flagcdn.com/w160/dz.png", "🇩🇿", "Algeria"),
         "tunisia" to TeamVisual("TUN", "https://flagcdn.com/w160/tn.png", "🇹🇳", "Tunisia"),
         "ivory coast" to TeamVisual("CIV", "https://flagcdn.com/w160/ci.png", "🇨🇮", "Ivory Coast"),
         "côte d'ivoire" to TeamVisual("CIV", "https://flagcdn.com/w160/ci.png", "🇨🇮", "Ivory Coast"),
-
-        // Domestic & Franchise Cricket Teams (mapped to their country flag + official 3/4 letter code)
-        "dhaka division" to TeamVisual("DHK", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Dhaka Division"),
-        "chattogram division" to TeamVisual("CTG", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Chattogram Division"),
-        "sylhet division" to TeamVisual("SYL", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Sylhet Division"),
-        "khulna division" to TeamVisual("KHL", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Khulna Division"),
-        "rajshahi division" to TeamVisual("RAJ", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Rajshahi Division"),
-        "rangpur division" to TeamVisual("RNG", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Rangpur Division"),
-        "barishal division" to TeamVisual("BAR", "https://flagcdn.com/w160/bd.png", "🇧🇩", "Barishal Division"),
-        "mumbai" to TeamVisual("MUM", "https://flagcdn.com/w160/in.png", "🇮🇳", "Mumbai"),
-        "karnataka" to TeamVisual("KAR", "https://flagcdn.com/w160/in.png", "🇮🇳", "Karnataka"),
-        "tamil nadu" to TeamVisual("TN", "https://flagcdn.com/w160/in.png", "🇮🇳", "Tamil Nadu"),
-        "delhi" to TeamVisual("DEL", "https://flagcdn.com/w160/in.png", "🇮🇳", "Delhi"),
-        "punjab" to TeamVisual("PUN", "https://flagcdn.com/w160/in.png", "🇮🇳", "Punjab"),
-        "bengal" to TeamVisual("BEN", "https://flagcdn.com/w160/in.png", "🇮🇳", "Bengal"),
-        "gujarat" to TeamVisual("GUJ", "https://flagcdn.com/w160/in.png", "🇮🇳", "Gujarat"),
-        "maharashtra" to TeamVisual("MAH", "https://flagcdn.com/w160/in.png", "🇮🇳", "Maharashtra"),
-        "uttar pradesh" to TeamVisual("UP", "https://flagcdn.com/w160/in.png", "🇮🇳", "Uttar Pradesh"),
-        "hyderabad" to TeamVisual("HYD", "https://flagcdn.com/w160/in.png", "🇮🇳", "Hyderabad"),
-        "kerala" to TeamVisual("KER", "https://flagcdn.com/w160/in.png", "🇮🇳", "Kerala"),
-        "vidarbha" to TeamVisual("VID", "https://flagcdn.com/w160/in.png", "🇮🇳", "Vidarbha"),
-        "baroda" to TeamVisual("BRD", "https://flagcdn.com/w160/in.png", "🇮🇳", "Baroda"),
-        "haryana" to TeamVisual("HAR", "https://flagcdn.com/w160/in.png", "🇮🇳", "Haryana"),
-        "assam" to TeamVisual("ASM", "https://flagcdn.com/w160/in.png", "🇮🇳", "Assam"),
-        "goa" to TeamVisual("GOA", "https://flagcdn.com/w160/in.png", "🇮🇳", "Goa"),
-        "sikkim" to TeamVisual("SIK", "https://flagcdn.com/w160/in.png", "🇮🇳", "Sikkim"),
-        "new south wales" to TeamVisual("NSW", "https://flagcdn.com/w160/au.png", "🇦🇺", "New South Wales"),
-        "victoria" to TeamVisual("VIC", "https://flagcdn.com/w160/au.png", "🇦🇺", "Victoria"),
-        "queensland" to TeamVisual("QLD", "https://flagcdn.com/w160/au.png", "🇦🇺", "Queensland"),
-        "western australia" to TeamVisual("WA", "https://flagcdn.com/w160/au.png", "🇦🇺", "Western Australia"),
-        "south australia" to TeamVisual("SAU", "https://flagcdn.com/w160/au.png", "🇦🇺", "South Australia"),
-        "tasmania" to TeamVisual("TAS", "https://flagcdn.com/w160/au.png", "🇦🇺", "Tasmania"),
-        "sydney sixers women" to TeamVisual("SS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Sydney Sixers W"),
-        "sydney thunder women" to TeamVisual("ST-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Sydney Thunder W"),
-        "melbourne stars women" to TeamVisual("MS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Melbourne Stars W"),
-        "melbourne renegades women" to TeamVisual("MR-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Melbourne Renegades W"),
-        "perth scorchers women" to TeamVisual("PS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Perth Scorchers W"),
-        "adelaide strikers women" to TeamVisual("AS-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Adelaide Strikers W"),
-        "brisbane heat women" to TeamVisual("BH-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Brisbane Heat W"),
-        "hobart hurricanes women" to TeamVisual("HH-W", "https://flagcdn.com/w160/au.png", "🇦🇺", "Hobart Hurricanes W"),
-        "dolphins" to TeamVisual("DOL", "https://flagcdn.com/w160/za.png", "🇿🇦", "Dolphins"),
-        "titans" to TeamVisual("TIT", "https://flagcdn.com/w160/za.png", "🇿🇦", "Titans"),
-        "lions" to TeamVisual("LIO", "https://flagcdn.com/w160/za.png", "🇿🇦", "Lions"),
-        "warriors" to TeamVisual("WAR", "https://flagcdn.com/w160/za.png", "🇿🇦", "Warriors"),
-        "knights" to TeamVisual("KNI", "https://flagcdn.com/w160/za.png", "🇿🇦", "Knights"),
-        "rocks" to TeamVisual("ROC", "https://flagcdn.com/w160/za.png", "🇿🇦", "Rocks"),
-        "western province" to TeamVisual("WP", "https://flagcdn.com/w160/za.png", "🇿🇦", "Western Province"),
-        "north west" to TeamVisual("NW", "https://flagcdn.com/w160/za.png", "🇿🇦", "North West"),
-
-        // Major European & International Football Clubs — strictly club crests (never national flags)
-        "real madrid" to TeamVisual("RMA", "https://a.espncdn.com/i/teamlogos/soccer/500/86.png", "", "Real Madrid"),
-        "barcelona" to TeamVisual("BAR", "https://a.espncdn.com/i/teamlogos/soccer/500/83.png", "", "Barcelona"),
-        "fc barcelona" to TeamVisual("BAR", "https://a.espncdn.com/i/teamlogos/soccer/500/83.png", "", "Barcelona"),
-        "atletico madrid" to TeamVisual("ATM", "https://a.espncdn.com/i/teamlogos/soccer/500/1068.png", "", "Atletico Madrid"),
-        "atlético madrid" to TeamVisual("ATM", "https://a.espncdn.com/i/teamlogos/soccer/500/1068.png", "", "Atletico Madrid"),
-        "manchester city" to TeamVisual("MCI", "https://a.espncdn.com/i/teamlogos/soccer/500/382.png", "", "Man City"),
-        "man city" to TeamVisual("MCI", "https://a.espncdn.com/i/teamlogos/soccer/500/382.png", "", "Man City"),
-        "manchester united" to TeamVisual("MUN", "https://a.espncdn.com/i/teamlogos/soccer/500/360.png", "", "Man United"),
-        "man united" to TeamVisual("MUN", "https://a.espncdn.com/i/teamlogos/soccer/500/360.png", "", "Man United"),
-        "liverpool" to TeamVisual("LIV", "https://a.espncdn.com/i/teamlogos/soccer/500/364.png", "", "Liverpool"),
-        "arsenal" to TeamVisual("ARS", "https://a.espncdn.com/i/teamlogos/soccer/500/359.png", "", "Arsenal"),
-        "chelsea" to TeamVisual("CHE", "https://a.espncdn.com/i/teamlogos/soccer/500/363.png", "", "Chelsea"),
-        "tottenham" to TeamVisual("TOT", "https://a.espncdn.com/i/teamlogos/soccer/500/367.png", "", "Tottenham"),
-        "tottenham hotspur" to TeamVisual("TOT", "https://a.espncdn.com/i/teamlogos/soccer/500/367.png", "", "Tottenham"),
-        "bayern munich" to TeamVisual("BAY", "https://a.espncdn.com/i/teamlogos/soccer/500/132.png", "", "Bayern Munich"),
-        "borussia dortmund" to TeamVisual("BVB", "https://a.espncdn.com/i/teamlogos/soccer/500/124.png", "", "Dortmund"),
-        "bayer leverkusen" to TeamVisual("B04", "https://a.espncdn.com/i/teamlogos/soccer/500/131.png", "", "Leverkusen"),
-        "paris saint-germain" to TeamVisual("PSG", "https://a.espncdn.com/i/teamlogos/soccer/500/160.png", "", "PSG"),
-        "psg" to TeamVisual("PSG", "https://a.espncdn.com/i/teamlogos/soccer/500/160.png", "", "PSG"),
-        "marseille" to TeamVisual("OM", "https://a.espncdn.com/i/teamlogos/soccer/500/176.png", "", "Marseille"),
-        "inter milan" to TeamVisual("INT", "https://a.espncdn.com/i/teamlogos/soccer/500/110.png", "", "Inter Milan"),
-        "internazionale" to TeamVisual("INT", "https://a.espncdn.com/i/teamlogos/soccer/500/110.png", "", "Inter Milan"),
-        "ac milan" to TeamVisual("MIL", "https://a.espncdn.com/i/teamlogos/soccer/500/103.png", "", "AC Milan"),
-        "juventus" to TeamVisual("JUV", "https://a.espncdn.com/i/teamlogos/soccer/500/111.png", "", "Juventus"),
-        "napoli" to TeamVisual("NAP", "https://a.espncdn.com/i/teamlogos/soccer/500/114.png", "", "Napoli"),
-        "as roma" to TeamVisual("ROM", "https://a.espncdn.com/i/teamlogos/soccer/500/104.png", "", "AS Roma")
+        "mali" to TeamVisual("MLI", "https://flagcdn.com/w160/ml.png", "🇲🇱", "Mali"),
+        "burkina faso" to TeamVisual("BFA", "https://flagcdn.com/w160/bf.png", "🇧🇫", "Burkina Faso")
     )
 
-    fun isSeniorInternationalMatch(team1Name: String, team2Name: String, tournament: String = ""): Boolean {
+    /**
+     * Rejects U17, U18, U19, U20, U21, U23, Youth, Academy, Reserve, B-team,
+     * Amateur, Grassroots, Virtual, or Esports matches.
+     */
+    fun isYouthOrNonSeniorEvent(team1Name: String, team2Name: String, tournament: String = ""): Boolean {
+        return youthOrReserveRegex.containsMatchIn(team1Name) ||
+            youthOrReserveRegex.containsMatchIn(team2Name) ||
+            youthOrReserveRegex.containsMatchIn(tournament)
+    }
+
+    /**
+     * Checks if a Cricket match is strictly an International Cricket match between
+     * recognized Senior National Cricket Teams (excluding domestic, franchise, U19, A-team, or women's domestic).
+     */
+    fun isSeniorInternationalCricketMatch(
+        team1Name: String,
+        team2Name: String,
+        tournament: String = "",
+        format: String = ""
+    ): Boolean {
         val t1 = team1Name.trim()
         val t2 = team2Name.trim()
         if (t1.isBlank() || t2.isBlank()) return false
 
-        if (nonSeniorRegex.containsMatchIn(t1) ||
-            nonSeniorRegex.containsMatchIn(t2) ||
-            nonSeniorRegex.containsMatchIn(tournament)
+        if (isYouthOrNonSeniorEvent(t1, t2, "$tournament $format")) {
+            return false
+        }
+        if (domesticOrFranchiseCricketRegex.containsMatchIn(t1) ||
+            domesticOrFranchiseCricketRegex.containsMatchIn(t2) ||
+            domesticOrFranchiseCricketRegex.containsMatchIn(tournament)
         ) {
+            return false
+        }
+
+        // Format check if provided: First Class (domestic), T10, etc. are not senior international unless "Test", "ODI", "T20I", "List A"
+        val cleanFormat = format.trim().lowercase(Locale.US)
+        if (cleanFormat == "first class" || cleanFormat == "t10" || cleanFormat == "hundred") {
             return false
         }
 
         return isRecognizedNationalTeam(t1) && isRecognizedNationalTeam(t2)
     }
 
-    fun isNonSeniorOrExcludedCompetition(text: String): Boolean {
-        val lower = text.lowercase()
-        if (nonSeniorRegex.containsMatchIn(lower)) return true
-        val excludedKeywords = listOf(
-            "esports", "e-sports", "virtual", "cyber", "amateur", "friendly club",
-            "b-team", "b team", "reserve league", "youth league", "premier league 2"
-        )
-        return excludedKeywords.any { lower.contains(it) }
-    }
-
-    fun isNonSeniorFootballTeamName(teamName: String): Boolean {
-        val trimmed = teamName.trim()
-        if (trimmed.isBlank()) return false
-        if (nonSeniorRegex.containsMatchIn(trimmed)) return true
-        if (reserveOrBTeamSuffixRegex.containsMatchIn(trimmed)) return true
-        return false
+    /**
+     * Legacy helper kept for compatibility: checks if both teams are recognized senior national teams.
+     */
+    fun isSeniorInternationalMatch(team1Name: String, team2Name: String, tournament: String = ""): Boolean {
+        return isSeniorInternationalCricketMatch(team1Name, team2Name, tournament)
     }
 
     fun isRecognizedNationalTeam(teamName: String): Boolean {
-        val clean = teamName.trim().lowercase()
-        if (nonSeniorRegex.containsMatchIn(clean)) return false
-        val visual = nationalTeamMap[clean] ?: return false
-        return visual.flagUrl.contains("flagcdn.com", ignoreCase = true)
+        val clean = teamName.trim().lowercase(Locale.US)
+            .removeSuffix(" women")
+            .removeSuffix("-w")
+            .trim()
+        if (youthOrReserveRegex.containsMatchIn(teamName)) return false
+        return nationalTeamMap.containsKey(clean)
     }
 
-    fun resolve(
+    /**
+     * Checks whether a given epoch timestamp falls within Yesterday, Today, or Tomorrow
+     * in the `Asia/Dhaka` timezone.
+     */
+    fun isWithinYesterdayTodayTomorrowDhaka(
+        matchEpochMs: Long,
+        referenceNowEpochMs: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (matchEpochMs <= 0L) return false
+        val (startMs, endMs) = getDhakaThreeDayWindowBounds(referenceNowEpochMs)
+        return matchEpochMs in startMs..endMs
+    }
+
+    /**
+     * Returns `(startOfYesterdayEpochMs, endOfTomorrowEpochMs)` in `Asia/Dhaka` timezone.
+     */
+    fun getDhakaThreeDayWindowBounds(referenceNowEpochMs: Long = System.currentTimeMillis()): Pair<Long, Long> {
+        val startCal = Calendar.getInstance(DHAKA_TIMEZONE, Locale.US).apply {
+            timeInMillis = referenceNowEpochMs
+            add(Calendar.DAY_OF_YEAR, -1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val endCal = Calendar.getInstance(DHAKA_TIMEZONE, Locale.US).apply {
+            timeInMillis = referenceNowEpochMs
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 23)
+            set(Calendar.MINUTE, 59)
+            set(Calendar.SECOND, 59)
+            set(Calendar.MILLISECOND, 999)
+        }
+        return startCal.timeInMillis to endCal.timeInMillis
+    }
+
+    /**
+     * Resolves team visuals while respecting whether the match is a National Team match
+     * or a Club Football match.
+     * - For Club Football (`isNationalTeam == false`), NEVER substitute a country flag!
+     *   Only use the club's own crest URL (`existingFlag` from ESPN `team.logo`) or a clean fallback.
+     */
+    fun resolveForMatch(
         teamName: String,
         teamCode: String = "",
         existingFlag: String = "",
-        isClubFootball: Boolean = false
+        isNationalTeam: Boolean = true
     ): TeamVisual {
-        val cleanName = teamName.trim().lowercase()
-        val cleanCode = teamCode.trim().lowercase()
-        val baseNameWithoutSuffix = cleanName
+        if (!isNationalTeam) {
+            val cleanLogoUrl = existingFlag.trim().takeIf {
+                it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
+            }.orEmpty()
+            val code = teamCode.trim().ifBlank {
+                teamName.trim().take(3).uppercase(Locale.US)
+            }
+            return TeamVisual(
+                code = code,
+                flagUrl = cleanLogoUrl,
+                emoji = "", // Never show a country flag emoji for a club
+                countryName = teamName.trim(),
+                isNationalFlag = false
+            )
+        }
+        return resolve(teamName, teamCode, existingFlag)
+    }
+
+    fun resolve(teamName: String, teamCode: String = "", existingFlag: String = ""): TeamVisual {
+        val cleanName = teamName.trim().lowercase(Locale.US)
             .removeSuffix(" women")
-            .removeSuffix(" w")
-            .removeSuffix(" u19")
-            .removeSuffix(" a")
-            .removeSuffix(" xi")
+            .removeSuffix("-w")
+            .trim()
+        val cleanCode = teamCode.trim().lowercase(Locale.US)
+            .removeSuffix("-w")
             .trim()
 
-        // Direct exact lookup (do NOT guess country flags by partial substring for unknown clubs)
-        val matched = nationalTeamMap[cleanName]
-            ?: nationalTeamMap[baseNameWithoutSuffix]
-            ?: (if (!isClubFootball) nationalTeamMap[cleanCode] else null)
+        val matched = nationalTeamMap[cleanCode]
+            ?: nationalTeamMap[cleanName]
+            ?: nationalTeamMap.entries.firstOrNull { (k, _) ->
+                k.length >= 4 && cleanName == k
+            }?.value
 
         val resolvedCode = when {
-            matched != null && (teamCode.isBlank() || teamCode.startsWith("Team ", ignoreCase = true) || teamCode.length <= 2) -> matched.code
-            teamCode.isNotBlank() && !teamCode.startsWith("Team ", ignoreCase = true) -> teamCode.trim().uppercase()
+            teamCode.isNotBlank() -> teamCode.trim()
             matched != null -> matched.code
-            cleanName.isNotBlank() && !cleanName.startsWith("team ") -> {
-                val words = teamName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                if (words.size >= 2) {
-                    words.take(3).joinToString("") { it.first().uppercase() }
-                } else {
-                    teamName.trim().take(3).uppercase()
-                }
-            }
-            else -> teamCode.trim().ifBlank { "TBD" }.uppercase()
+            else -> teamName.trim().take(3).uppercase(Locale.US).ifBlank { "INT" }
         }
 
-        val validExistingUrl = existingFlag.trim().takeIf {
-            it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
-        }
-
-        // Never assign a national flag (flagcdn.com) to a club football team!
         val resolvedFlagUrl = when {
-            validExistingUrl != null -> {
-                if (isClubFootball && validExistingUrl.contains("flagcdn.com", ignoreCase = true)) {
-                    matched?.flagUrl?.takeIf { !it.contains("flagcdn.com", ignoreCase = true) }.orEmpty()
-                } else {
-                    validExistingUrl
-                }
-            }
-            matched != null -> {
-                if (isClubFootball && matched.flagUrl.contains("flagcdn.com", ignoreCase = true)) {
-                    ""
-                } else {
-                    matched.flagUrl
-                }
-            }
+            existingFlag.trim().startsWith("http://", ignoreCase = true) ||
+                existingFlag.trim().startsWith("https://", ignoreCase = true) -> existingFlag.trim()
+            matched != null -> matched.flagUrl
             else -> ""
         }
 
         val resolvedEmoji = when {
-            isClubFootball -> ""
             matched != null -> matched.emoji
             existingFlag.isNotBlank() && !existingFlag.startsWith("http", ignoreCase = true) -> existingFlag.trim()
-            else -> ""
+            else -> "🏳️"
         }
 
         return TeamVisual(
             code = resolvedCode,
             flagUrl = resolvedFlagUrl,
             emoji = resolvedEmoji,
-            countryName = matched?.countryName ?: teamName.trim()
+            countryName = matched?.countryName ?: teamName.trim(),
+            isNationalFlag = true
         )
     }
 }

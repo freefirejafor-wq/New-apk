@@ -32,9 +32,6 @@ fun NetworkStreamDialog(
 ) {
     var url by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("Custom Stream") }
-    var referer by remember { mutableStateOf("") }
-    var userAgent by remember { mutableStateOf("") }
-    var showAdvancedHeaders by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -87,49 +84,25 @@ fun NetworkStreamDialog(
                     maxLines = 3
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = { showAdvancedHeaders = !showAdvancedHeaders }) {
-                        Text(
-                            text = if (showAdvancedHeaders) "Hide Custom Headers ▲" else "Custom Headers (Referer / UA) ▼",
-                            color = CyanAccent,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = "Quick Test Stream:",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
+                    )
                     TextButton(
                         onClick = {
                             title = "Akamai FHD Live"
                             url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
                         }
                     ) {
-                        Text("Load Sample HLS", color = GoldYellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Load Sample HLS", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
-                }
-
-                if (showAdvancedHeaders) {
-                    OutlinedTextField(
-                        value = referer,
-                        onValueChange = { referer = it },
-                        label = { Text("HTTP Referer / Origin (Optional)") },
-                        placeholder = { Text("https://embed.example.com/") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = userAgent,
-                        onValueChange = { userAgent = it },
-                        label = { Text("Custom User-Agent (Optional)") },
-                        placeholder = { Text("Mozilla/5.0 ...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -148,10 +121,7 @@ fun NetworkStreamDialog(
                                     StreamSource(
                                         name = title.ifBlank { "Network Stream" },
                                         quality = "FHD",
-                                        url = url.trim(),
-                                        referer = referer.trim().takeIf { it.isNotBlank() },
-                                        origin = referer.trim().takeIf { it.isNotBlank() },
-                                        userAgent = userAgent.trim().takeIf { it.isNotBlank() }
+                                        url = url.trim()
                                     )
                                 )
                                 onDismiss()
@@ -324,73 +294,28 @@ fun M3UPlaylistImportDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 1-Click Live Sports M3U Presets (পদ্ধতি ২)
-                Column(
+                // Sample M3U quick loader
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "1-Click Live Sports M3U Presets (Auto-Links to Live Matches):",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = GoldYellow,
-                            fontWeight = FontWeight.Bold
-                        )
+                        text = "Quick Demo:",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                input = "https://iptv-org.github.io/iptv/categories/sports.m3u"
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("🌐 Global Sports M3U", color = CyanAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                input = """
-#EXTM3U
-#EXTINF:-1 group-title="Bangla Sports", T Sports HD
-https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
-#EXTINF:-1 group-title="Bangla Sports", Gazi TV (GTV HD)
-https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 group-title="Cricket", Willow Cricket FHD
-https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
-#EXTINF:-1 group-title="Cricket", Star Sports 1 HD
-https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 group-title="Pakistan", PTV Sports HD
-https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8
-#EXTINF:-1 group-title="Pakistan", A Sports HD
-https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
-                                """.trimIndent()
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("🏏 Cricket & BD Pack", color = CyanAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    OutlinedButton(
+                    TextButton(
                         onClick = {
                             input = """
 #EXTM3U
-#EXTINF:-1 group-title="Football", BeIN Sports 1 English FHD
+#EXTINF:-1 tvg-id="willow" tvg-name="Willow HD" tvg-logo="https://example.com/willow.png" group-title="Cricket", Willow Sports HD
 https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
-#EXTINF:-1 group-title="Football", TNT Sports 1 UHD
+#EXTINF:-1 tvg-id="sky" tvg-name="Sky Sports Main Event" group-title="Football", Sky Sports UHD
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 group-title="SonyLiv Live", Sony Sports Ten 2 HD
-https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8
-#EXTINF:-1 group-title="Football", SuperSport Premier League
-https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
                             """.trimIndent()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        }
                     ) {
-                        Text("⚽ Football & Champions League Pack (beIN / TNT / Sony Ten 2)", color = CyanAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Fill Sample M3U", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -433,15 +358,6 @@ fun HighlightsDialog(
     onPlayHighlight: (com.example.data.model.HighlightItem) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var selectedCategory by remember { mutableStateOf("All") }
-    val filteredHighlights = remember(highlights, selectedCategory) {
-        when (selectedCategory) {
-            "Cricket" -> highlights.filter { it.sport == com.example.data.model.SportType.CRICKET }
-            "Football" -> highlights.filter { it.sport == com.example.data.model.SportType.FOOTBALL }
-            else -> highlights
-        }
-    }
-
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -478,44 +394,15 @@ fun HighlightsDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Sport Category Filter Chips
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("All", "Cricket", "Football").forEach { cat ->
-                        val isSelected = selectedCategory == cat
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { selectedCategory = cat },
-                            label = {
-                                Text(
-                                    text = cat,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize = 11.sp
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
-                                selectedLabelColor = CyanAccent,
-                                containerColor = NavySurface,
-                                labelColor = TextSecondary
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp),
+                        .heightIn(max = 400.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(filteredHighlights, key = { it.id }) { item ->
+                    items(highlights, key = { it.id }) { item ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -758,8 +645,18 @@ fun LiveScoresModalDialog(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(activeList, key = { "${it.status}_${it.id}" }) { match ->
-                            val v1 = com.example.data.util.TeamFlagResolver.resolve(match.team1Name, match.team1Code, match.team1FlagUrl)
-                            val v2 = com.example.data.util.TeamFlagResolver.resolve(match.team2Name, match.team2Code, match.team2FlagUrl)
+                            val v1 = com.example.data.util.TeamFlagResolver.resolveForMatch(
+                                match.team1Name,
+                                match.team1Code,
+                                match.team1FlagUrl,
+                                isNationalTeam = match.isNationalTeam
+                            )
+                            val v2 = com.example.data.util.TeamFlagResolver.resolveForMatch(
+                                match.team2Name,
+                                match.team2Code,
+                                match.team2FlagUrl,
+                                isNationalTeam = match.isNationalTeam
+                            )
 
                             Card(
                                 modifier = Modifier
@@ -794,7 +691,8 @@ fun LiveScoresModalDialog(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         when (match.status) {
                                             com.example.data.model.MatchStatus.LIVE -> com.example.ui.components.PulsingLiveBadge()
-                                            com.example.data.model.MatchStatus.UPCOMING -> com.example.ui.components.UpcomingBadge()
+                                            com.example.data.model.MatchStatus.UPCOMING,
+                                            com.example.data.model.MatchStatus.UNKNOWN -> com.example.ui.components.UpcomingBadge()
                                             com.example.data.model.MatchStatus.FINISHED -> com.example.ui.components.FinishedBadge()
                                         }
                                     }
@@ -813,12 +711,14 @@ fun LiveScoresModalDialog(
                                             com.example.ui.components.TeamFlagBadge(
                                                 flagUrl = v1.flagUrl,
                                                 emoji = v1.emoji,
-                                                code = v1.code
+                                                code = v1.code,
+                                                teamName = match.team1Name,
+                                                isNationalTeam = match.isNationalTeam
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Column {
                                                 Text(
-                                                    text = "${v1.emoji} ${match.team1Name}",
+                                                    text = match.team1Name,
                                                     fontWeight = FontWeight.Bold,
                                                     color = TextPrimary,
                                                     fontSize = 13.sp,
@@ -852,7 +752,7 @@ fun LiveScoresModalDialog(
                                         ) {
                                             Column(horizontalAlignment = Alignment.End) {
                                                 Text(
-                                                    text = "${match.team2Name} ${v2.emoji}",
+                                                    text = match.team2Name,
                                                     fontWeight = FontWeight.Bold,
                                                     color = TextPrimary,
                                                     fontSize = 13.sp,
@@ -869,7 +769,9 @@ fun LiveScoresModalDialog(
                                             com.example.ui.components.TeamFlagBadge(
                                                 flagUrl = v2.flagUrl,
                                                 emoji = v2.emoji,
-                                                code = v2.code
+                                                code = v2.code,
+                                                teamName = match.team2Name,
+                                                isNationalTeam = match.isNationalTeam
                                             )
                                         }
                                     }

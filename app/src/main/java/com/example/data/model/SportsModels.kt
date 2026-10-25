@@ -9,15 +9,25 @@ data class SportsChannel(
     val logoText: String = "", // Short badge text e.g. "TNT", "TSN"
     val logoUrl: String = "",
     val streams: List<StreamSource> = emptyList(),
-    val isFavorite: Boolean = false
-)
+    val isFavorite: Boolean = false,
+    val isEnabled: Boolean = true
+) {
+    fun publicEnabledStreams(): List<StreamSource> {
+        return streams
+            .filter { it.isEnabled && it.url.isNotBlank() }
+            .sortedWith(
+                compareBy<StreamSource> { it.isBackup }
+                    .thenByDescending { it.isDefault }
+                    .thenBy { it.priorityOrder }
+            )
+    }
+}
 
 data class CategoryItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String, // e.g. "SPORTS", "FANCODE IND", "SONYLIV LIVE"
     val channelCount: Int = 12,
-    val iconName: String = "sports",
-    val badgeType: String = "GREEN_CIRCLE"
+    val iconName: String = "sports"
 )
 
 data class HighlightItem(
@@ -27,73 +37,110 @@ data class HighlightItem(
     val duration: String,
     val thumbnailUrl: String = "",
     val videoUrl: String,
-    val sport: SportType = SportType.FOOTBALL
+    val sport: SportType = SportType.FOOTBALL,
+    val matchId: String? = null,
+    val isApproved: Boolean = true
+)
+
+data class FootballCompetitionOption(
+    val leagueId: String,
+    val name: String,
+    val category: String, // "International" or "Club"
+    val isNationalTeam: Boolean
+)
+
+data class ProviderSyncDiagnostics(
+    val providerName: String,
+    val enabled: Boolean = true,
+    val lastSyncEpochMs: Long? = null,
+    val lastSyncDhakaText: String = "Never",
+    val statusText: String = "Idle",
+    val lastError: String? = null,
+    val activeMatchCount: Int = 0,
+    val isStale: Boolean = false
+)
+
+data class UnmappedAssociationNotice(
+    val previousMatchId: String,
+    val sport: SportType,
+    val team1Name: String,
+    val team2Name: String,
+    val tournament: String,
+    val hadFavorite: Boolean,
+    val preservedStreams: List<StreamSource> = emptyList(),
+    val detectedAtDhaka: String,
+    val reason: String
 )
 
 data class AppConfig(
     val appTitle: String = "Sports Live",
     val version: String = "9.0",
-    val announcement: String = "Welcome to Sports Live! Real-time International Cricket & Top Football streams are active.",
+    val announcement: String = "Welcome to Sports Live! Ultra HD multi-server live sports streams are active.",
     val telegramLink: String = "https://t.me/sports_live_streams",
     val adminPin: String = "1234",
     val forceLowQuality: Boolean = false,
     val isHardwareAccelerationEnabled: Boolean = true,
-    val remoteFeedUrl: String = "https://app.local/api",
+    val remoteFeedUrl: String = "https://api.goscorer.com/api/v3/getLiveMatches",
     val autoSyncOnLaunch: Boolean = true,
-    val syncLiveEnabled: Boolean = true,
-    val syncUpcomingEnabled: Boolean = true,
-    val syncFinishedEnabled: Boolean = true,
-    val syncFootballEnabled: Boolean = true,
-    val autoRefreshIntervalSeconds: Int = 30,
-    val enabledFootballLeagues: List<String> = DEFAULT_FOOTBALL_LEAGUE_ALLOWLIST
+    val footballSyncEnabled: Boolean = true,
+    val cricketSyncEnabled: Boolean = true,
+    val autoRefreshIntervalSec: Int = 30,
+    val enabledFootballLeagues: Set<String> = DEFAULT_ENABLED_FOOTBALL_LEAGUES
 ) {
     companion object {
-        val DEFAULT_FOOTBALL_LEAGUE_ALLOWLIST = listOf(
+        val DEFAULT_ENABLED_FOOTBALL_LEAGUES: Set<String> = setOf(
+            // Required International & Major Tournaments
             "uefa.champions",
+            "fifa.worldq.uefa",
+            "fifa.worldq.conmebol",
+            "uefa.nations",
+            // Required Major Club Leagues (Big Five)
             "eng.1",
             "esp.1",
             "ita.1",
             "ger.1",
             "fra.1",
-            "fifa.worldq.uefa",
-            "fifa.worldq.conmebol",
+            // Additional Verified Senior International Competitions
+            "fifa.world",
+            "fifa.worldq.concacaf",
             "fifa.worldq.afc",
+            "fifa.worldq.caf",
+            "fifa.worldq.ofc",
+            "fifa.friendly",
+            "conmebol.america",
             "uefa.euro",
-            "uefa.nations",
-            "fifa.friendly"
-        )
-
-        val VERIFIED_FOOTBALL_LEAGUE_LABELS = mapOf(
-            "uefa.champions" to "UEFA Champions League",
-            "uefa.europa" to "UEFA Europa League",
-            "eng.1" to "English Premier League",
-            "esp.1" to "Spanish La Liga",
-            "ita.1" to "Italian Serie A",
-            "ger.1" to "German Bundesliga",
-            "fra.1" to "French Ligue 1",
-            "fifa.world" to "FIFA World Cup",
-            "fifa.worldq.uefa" to "FIFA World Cup Qualifiers (UEFA)",
-            "fifa.worldq.conmebol" to "FIFA World Cup Qualifiers (CONMEBOL)",
-            "fifa.worldq.afc" to "FIFA World Cup Qualifiers (AFC)",
-            "uefa.euro" to "UEFA European Championship",
-            "uefa.nations" to "UEFA Nations League",
-            "conmebol.america" to "Copa America",
-            "fifa.friendly" to "International Friendlies"
+            "caf.nations",
+            "afc.cup",
+            "concacaf.gold",
+            // Additional Verified Senior First-Team Club Competitions
+            "uefa.europa",
+            "uefa.europa.conf",
+            "conmebol.libertadores",
+            "conmebol.sudamericana",
+            "ned.1",
+            "por.1",
+            "bel.1",
+            "tur.1",
+            "sco.1",
+            "sui.1",
+            "aut.1",
+            "gre.1",
+            "bra.1",
+            "arg.1",
+            "usa.1",
+            "mex.1",
+            "ksa.1",
+            "jpn.1",
+            "aus.1",
+            "ind.1",
+            "eng.fa",
+            "esp.copa_del_rey",
+            "ita.coppa_italia",
+            "ger.dfb_pokal",
+            "fra.coupe_de_france"
         )
     }
 }
-
-data class UnmatchedStreamAssociation(
-    val oldMatchId: String,
-    val team1Name: String,
-    val team2Name: String,
-    val tournament: String,
-    val sport: SportType = SportType.FOOTBALL,
-    val matchDateText: String,
-    val streams: List<StreamSource>,
-    val wasFavorite: Boolean,
-    val reason: String
-)
 
 data class M3U8CheckResult(
     val url: String,
@@ -115,14 +162,14 @@ data class CricketScorecard(
     val crr: String,
     val rrr: String,
     val needRunsText: String,
-    val batsmen: List<Pair<String, String>>,
-    val bowlers: List<Pair<String, String>>,
+    val batsmen: List<Pair<String, String>>, // Name to "Runs (Balls)"
+    val bowlers: List<Pair<String, String>>, // Name to "Wkts-Runs (Overs)"
     val recentBalls: List<String>
 )
 
 data class FootballMatchEvent(
     val minute: String,
-    val eventType: String,
+    val eventType: String, // "GOAL", "YELLOW_CARD", "RED_CARD", "SUB"
     val player: String,
     val team: String
 )
@@ -134,7 +181,7 @@ data class FootballScoreDetail(
     val team2: String,
     val score: String,
     val time: String,
-    val possession: Pair<Int, Int>,
+    val possession: Pair<Int, Int>, // e.g. 58% vs 42%
     val shots: Pair<Int, Int>,
     val events: List<FootballMatchEvent>
 )

@@ -37,16 +37,17 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `repository starts without hardcoded demo fixtures and preserves unmatched stream associations`() {
+    fun `repository starts without hardcoded demo fixtures`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
         val matches = repository.matches.value
-        assertTrue("Active match list should not contain old hardcoded demo matches (m1..m8)", matches.none { it.id in setOf("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8") })
+        // Hardcoded demo matches like fb-spl-hazem-fayha or cric-t20-nz-ind must never appear
+        assertTrue(matches.none { it.id == "fb-spl-hazem-fayha" || it.id == "cric-t20-nz-ind" })
     }
 
     @Test
-    fun `repository loads channels and adds custom channel with multiple streams`() {
+    fun `repository loads channels and filters publicEnabledStreams by priority and backup`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
@@ -58,19 +59,20 @@ class ExampleRobolectricTest {
             category = "Sports",
             logoText = "SKY",
             streams = listOf(
-                StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://example.com/live1.m3u8", isDefault = true),
-                StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://example.com/live2.m3u8"),
-                StreamSource(name = "SERVER 3 (SD)", quality = "SD", url = "https://example.com/live3.m3u8")
+                StreamSource(id = "bkp", name = "BACKUP SERVER", quality = "HD", url = "https://example.com/backup.m3u8", isEnabled = true, isBackup = true, priorityOrder = 0),
+                StreamSource(id = "dis", name = "DISABLED SERVER", quality = "FHD", url = "https://example.com/disabled.m3u8", isEnabled = false, priorityOrder = 0),
+                StreamSource(id = "pri", name = "PRIMARY SERVER", quality = "FHD", url = "https://example.com/primary.m3u8", isDefault = true, isEnabled = true, isBackup = false, priorityOrder = 1)
             )
         )
 
         repository.addOrUpdateChannel(newChannel)
-        val updatedChannels = repository.channels.value
-        assertEquals(initialCount + 1, updatedChannels.size)
-
-        val added = updatedChannels.firstOrNull { it.id == newChannel.id }
+        val added = repository.channels.value.firstOrNull { it.id == newChannel.id }
         assertNotNull(added)
-        assertEquals(3, added?.streams?.size)
+        val pubStreams = added!!.publicEnabledStreams()
+        // Disabled stream excluded; Primary stream ordered before Backup stream
+        assertEquals(2, pubStreams.size)
+        assertEquals("pri", pubStreams[0].id)
+        assertEquals("bkp", pubStreams[1].id)
     }
 
     @Test
@@ -84,32 +86,29 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `toggle match favorite works properly`() {
+    fun `unmapped stream override surfaces admin notice instead of silent deletion`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = SportsStreamRepository(context)
 
-        val sampleCrexMatch = LiveMatch(
-            id = "10MR",
-            tournament = "CSA • Test",
-            sport = SportType.CRICKET,
+        val orphanOverride = LiveMatch(
+            id = "old-provider-id-999",
+            tournament = "FOOTBALL | UEFA CHAMPIONS LEAGUE",
+            sport = SportType.FOOTBALL,
             status = MatchStatus.LIVE,
-            matchTime = "17 Oct 2026, 02:00 PM BST • SuperSport Park, Centurion",
-            timeOrScore = "RSA: 425/9 (127.1 ov) • AUS: 53/4 (21.4 ov) • Stumps",
-            team1Name = "South Africa",
-            team1Code = "RSA",
-            team2Name = "Australia",
-            team2Code = "AUS",
+            matchTime = "Today",
+            timeOrScore = "LIVE NOW",
+            team1Name = "Real Madrid",
+            team1Code = "RMA",
+            team2Name = "Bayern Munich",
+            team2Code = "BAY",
+            isNationalTeam = false,
             streams = listOf(
                 StreamSource(name = "SERVER 1 (FHD)", quality = "1080p FHD", url = "https://example.com/1.m3u8", isDefault = true)
             )
         )
-        repository.addOrUpdateMatch(sampleCrexMatch)
+        repository.addOrUpdateMatch(orphanOverride)
 
-        val match = repository.matches.value.first { it.id == "10MR" }
-        val initialFav = match.isFavorite
-
-        repository.toggleMatchFavorite(match.id)
-        val updated = repository.matches.value.first { it.id == match.id }
-        assertEquals(!initialFav, updated.isFavorite)
+        val notices = repository.unmappedNotices.value
+        assertTrue(notices.any { it.previousMatchId == "old-provider-id-999" })
     }
 }

@@ -5,14 +5,8 @@ import java.util.UUID
 enum class MatchStatus {
     LIVE,
     UPCOMING,
-    FINISHED
-}
-
-enum class MatchDateFilter(val labelBn: String, val dayOffsetFromTodayDhaka: Int?) {
-    ALL_DAYS("সব দিন", null),
-    YESTERDAY("গতকাল", -1),
-    TODAY("আজ", 0),
-    TOMORROW("আগামীকাল", 1)
+    FINISHED,
+    UNKNOWN
 }
 
 enum class SportType(val displayName: String, val badgeCount: Int) {
@@ -28,7 +22,7 @@ enum class SportType(val displayName: String, val badgeCount: Int) {
 
 data class LiveMatch(
     val id: String = UUID.randomUUID().toString(),
-    val tournament: String, // e.g. "CRICKET | ODI TRI-SERIES IN PAKISTAN"
+    val tournament: String, // e.g. "FOOTBALL | ENGLISH PREMIER LEAGUE"
     val sport: SportType = SportType.FOOTBALL,
     val team1Name: String,
     val team1Code: String,
@@ -36,23 +30,31 @@ data class LiveMatch(
     val team2Name: String,
     val team2Code: String,
     val team2FlagUrl: String = "",
-    val team1Score: String = "",
-    val team2Score: String = "",
     val status: MatchStatus = MatchStatus.UPCOMING,
-    val timeOrScore: String, // e.g., "IND 184/4 (18.2 ov)" or "Starts in 2 hours"
+    val timeOrScore: String = "", // Internal status/countdown text; scores are NEVER rendered on MatchCard
     val matchTime: String = "",
-    val startTimeEpochMs: Long = 0L,
     val streams: List<StreamSource> = emptyList(),
     val isFavorite: Boolean = false,
-    val isReminderSet: Boolean = false,
-    val providerStatusLabel: String = "", // e.g. "Live", "Upcoming", "Finished", "Unknown", "Postponed", "Cancelled"
-    val isPostponedOrCancelled: Boolean = false,
-    val isStaleCache: Boolean = false
+    val provider: String = "", // "ESPN" or "CREX" or "ADMIN"
+    val competitionId: String = "", // e.g. "eng.1", "uefa.champions", or CREX series key
+    val startTimeEpochMs: Long = 0L,
+    val isNationalTeam: Boolean = true, // True for International Cricket & National-Team Football; False for Club Football
+    val isStale: Boolean = false,
+    val sofascoreEventId: String? = null,
+    val broadcastChannels: List<String> = emptyList(),
+    val approvedHighlightUrl: String? = null
 ) {
-    val isStatusUnknown: Boolean
-        get() = providerStatusLabel.equals("Unknown", ignoreCase = true) ||
-            (isStaleCache && status == MatchStatus.LIVE)
-
-    val isConfirmedLive: Boolean
-        get() = status == MatchStatus.LIVE && !isPostponedOrCancelled && !isStatusUnknown
+    /**
+     * Returns only enabled and valid stream sources sorted by primary/default first,
+     * then priorityOrder, with backup streams last.
+     */
+    fun publicEnabledStreams(): List<StreamSource> {
+        return streams
+            .filter { it.isEnabled && it.url.isNotBlank() }
+            .sortedWith(
+                compareBy<StreamSource> { it.isBackup }
+                    .thenByDescending { it.isDefault }
+                    .thenBy { it.priorityOrder }
+            )
+    }
 }

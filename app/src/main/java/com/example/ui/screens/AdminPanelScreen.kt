@@ -29,13 +29,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.data.crex.CrexCricketService
-import com.example.data.crex.CrexDashboardState
+import androidx.activity.compose.BackHandler
+import com.example.data.espn.EspnFootballService
 import com.example.data.model.*
 import com.example.data.repository.SportsStreamRepository
 import com.example.ui.components.QualityBadge
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 enum class AdminTab(val label: String) {
@@ -52,13 +56,14 @@ fun AdminPanelScreen(
     onBackClick: () -> Unit,
     onTestPlayStream: (StreamSource) -> Unit
 ) {
+    BackHandler(onBack = onBackClick)
     val coroutineScope = rememberCoroutineScope()
     val matches by repository.matches.collectAsState()
     val channels by repository.channels.collectAsState()
     val config by repository.config.collectAsState()
     val cloudSyncStatus by repository.cloudSyncStatus.collectAsState()
-    val crexState by repository.crexDashboardState.collectAsState()
-    val unmatchedAssociations by repository.unmatchedAdminAssociations.collectAsState()
+    val providerDiagnostics by repository.providerDiagnostics.collectAsState()
+    val unmappedNotices by repository.unmappedNotices.collectAsState()
 
     var selectedTab by remember { mutableStateOf(AdminTab.M3U8_CHECKER) }
 
@@ -172,13 +177,6 @@ fun AdminPanelScreen(
                 AdminTab.MATCHES -> {
                     MatchesManagerTab(
                         matches = matches,
-                        unmatchedAssociations = unmatchedAssociations,
-                        onReassignAssociation = { oldId, targetId ->
-                            repository.reassignUnmatchedAssociation(oldId, targetId)
-                        },
-                        onDismissAssociation = { oldId ->
-                            repository.dismissUnmatchedAssociation(oldId)
-                        },
                         onAddMatchClick = {
                             matchBeingEdited = null
                             showAddMatchDialog = true
@@ -193,6 +191,7 @@ fun AdminPanelScreen(
                                 MatchStatus.UPCOMING -> MatchStatus.LIVE
                                 MatchStatus.LIVE -> MatchStatus.FINISHED
                                 MatchStatus.FINISHED -> MatchStatus.LIVE
+                                MatchStatus.UNKNOWN -> MatchStatus.UPCOMING
                             }
                             repository.addOrUpdateMatch(match.copy(status = nextStatus))
                         },
@@ -202,9 +201,15 @@ fun AdminPanelScreen(
                 AdminTab.SETTINGS -> {
                     AppSettingsTab(
                         config = config,
-                        crexState = crexState,
-                        unmatchedAssociations = unmatchedAssociations,
                         cloudSyncStatus = cloudSyncStatus,
+                        providerDiagnostics = providerDiagnostics,
+                        unmappedNotices = unmappedNotices,
+                        onDismissUnmappedNotice = { repository.dismissUnmappedNotice(it) },
+                        onTriggerProviderSync = {
+                            repository.refreshLiveMatches(force = true)
+                            repository.refreshUpcomingMatches(force = true)
+                            repository.refreshFinishedMatches(force = true)
+                        },
                         onUpdateConfig = { repository.updateConfig(it) },
                         onResetDefaults = { repository.resetToDefaults() },
                         onSyncRemote = { repository.syncFromRemoteFeed(it) },
@@ -645,9 +650,6 @@ fun ChannelsManagerTab(
 @Composable
 fun MatchesManagerTab(
     matches: List<LiveMatch>,
-    unmatchedAssociations: List<UnmatchedStreamAssociation> = emptyList(),
-    onReassignAssociation: (String, String) -> Unit = { _, _ -> },
-    onDismissAssociation: (String) -> Unit = {},
     onAddMatchClick: () -> Unit,
     onEditMatchClick: (LiveMatch) -> Unit,
     onDeleteMatch: (String) -> Unit,
@@ -660,95 +662,6 @@ fun MatchesManagerTab(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        if (unmatchedAssociations.isNotEmpty()) {
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.2.dp, GoldYellow, RoundedCornerShape(12.dp)),
-                    colors = CardDefaults.cardColors(containerColor = NavySurface)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.WarningAmber,
-                                contentDescription = null,
-                                tint = GoldYellow,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Unmatched Streams / Favourites (${unmatchedAssociations.size})",
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = GoldYellow
-                                )
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Provider match ID বদলে যাওয়ার পর নিচের স্ট্রিম/ফেভারিটগুলো স্বয়ংক্রিয়ভাবে মেলানো যায়নি। সেগুলো মুছে ফেলা হয়নি — এখান থেকে যেকোনো বর্তমান ম্যাচে যুক্ত করুন:",
-                            style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        unmatchedAssociations.forEach { assoc ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = NavyDark),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(10.dp)) {
-                                    Text(
-                                        text = "${assoc.team1Name} vs ${assoc.team2Name} (${assoc.sport.displayName})",
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextPrimary
-                                        )
-                                    )
-                                    Text(
-                                        text = "${assoc.tournament} • Old ID: ${assoc.oldMatchId} • ${assoc.streams.size} Streams • Fav: ${if (assoc.wasFavorite) "Yes" else "No"}",
-                                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 10.sp)
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        matches.take(6).forEach { target ->
-                                            AssistChip(
-                                                onClick = { onReassignAssociation(assoc.oldMatchId, target.id) },
-                                                label = {
-                                                    Text(
-                                                        text = "Map -> ${target.team1Code}v${target.team2Code}",
-                                                        fontSize = 10.sp,
-                                                        color = CyanAccent
-                                                    )
-                                                }
-                                            )
-                                        }
-                                        AssistChip(
-                                            onClick = { onDismissAssociation(assoc.oldMatchId) },
-                                            label = {
-                                                Text(
-                                                    text = "Dismiss",
-                                                    fontSize = 10.sp,
-                                                    color = LiveRed
-                                                )
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         item {
             Button(
                 onClick = onAddMatchClick,
@@ -820,7 +733,7 @@ fun MatchesManagerTab(
                                 onClick = { onToggleStatus(m) },
                                 label = {
                                     Text(
-                                        text = m.providerStatusLabel.ifBlank { m.status.name },
+                                        text = m.status.name,
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 10.sp,
@@ -860,16 +773,7 @@ fun MatchesManagerTab(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     QualityBadge(quality = s.quality)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = buildString {
-                                            append(s.name)
-                                            if (s.isBackup) append(" [Backup]")
-                                            if (!s.isEnabled || !s.isAuthorized) append(" [Off]")
-                                        },
-                                        color = if (s.isEnabled && s.isAuthorized) TextPrimary else TextSecondary,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                    Text(s.name, color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -906,9 +810,11 @@ fun MatchesManagerTab(
 @Composable
 fun AppSettingsTab(
     config: AppConfig,
-    crexState: CrexDashboardState = CrexDashboardState(),
-    unmatchedAssociations: List<UnmatchedStreamAssociation> = emptyList(),
     cloudSyncStatus: String = "Connected to Real-Time Cloud Server",
+    providerDiagnostics: List<ProviderSyncDiagnostics> = emptyList(),
+    unmappedNotices: List<UnmappedAssociationNotice> = emptyList(),
+    onDismissUnmappedNotice: (String) -> Unit = {},
+    onTriggerProviderSync: (suspend () -> Unit)? = null,
     onUpdateConfig: (AppConfig) -> Unit,
     onResetDefaults: () -> Unit,
     onSyncRemote: suspend (String) -> Result<Int>,
@@ -933,6 +839,14 @@ fun AppSettingsTab(
     var exportCopiedToast by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
     var copiedToast by remember { mutableStateOf(false) }
+    var isSyncingProviders by remember { mutableStateOf(false) }
+    var showFootballLeagueModal by remember { mutableStateOf(false) }
+
+    val dhakaTimeFormatter = remember {
+        SimpleDateFormat("dd MMM, hh:mm:ss a", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Dhaka")
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -940,7 +854,71 @@ fun AppSettingsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // PROVIDER SYNC, ALLOWLIST & ERROR MONITOR CARD
+        // UNMAPPED FAVOURITE / STREAM ASSOCIATION SAFE REMAP NOTICES
+        if (unmappedNotices.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.2.dp, GoldYellow, RoundedCornerShape(14.dp)),
+                    colors = CardDefaults.cardColors(containerColor = NavySurface)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.WarningAmber, contentDescription = null, tint = GoldYellow, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Unmapped Match Associations (${unmappedNotices.size})",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = GoldYellow
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "নিচের ম্যাচগুলোর provider match ID পরিবর্তিত হয়েছে বা আজকের ৩-দিনের উইন্ডোতে এখনও মেলানো যায়নি। ডাটা মুছে ফেলা হয়নি; ম্যাচ ফিডে এলে স্বয়ংক্রিয়ভাবে রিম্যাপ হবে:",
+                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        unmappedNotices.forEach { notice ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(NavyDark)
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${notice.sport.displayName} • ${notice.team1Name} vs ${notice.team2Name}",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                    Text(
+                                        text = "Old ID: ${notice.previousMatchId} • Streams: ${notice.preservedStreams.size} • Fav: ${if (notice.hadFavorite) "Yes" else "No"}",
+                                        style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontSize = 10.sp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onDismissUnmappedNotice(notice.previousMatchId) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Acknowledge", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // PROVIDER SYNC & LEAGUE CONTROL CARD (ESPN FOOTBALL & CREX CRICKET)
         item {
             Card(
                 modifier = Modifier
@@ -955,15 +933,10 @@ fun AppSettingsTab(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Hub,
-                                contentDescription = null,
-                                tint = CyanAccent,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Icon(Icons.Default.Sync, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "CREX Cricket & Football Provider Sync",
+                                text = "Provider Feed Control (ESPN & CREX)",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = TextPrimary
@@ -972,187 +945,154 @@ fun AppSettingsTab(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Asia/Dhaka টাইমজোন অনুযায়ী শুধুমাত্র গতকাল, আজ ও আগামীকালের সিনিয়র আন্তর্জাতিক ও প্রফেশনাল ক্লাব ম্যাচ সিঙ্ক করা হচ্ছে।",
+                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
+                    )
 
-                    val liveTimeStr = crexState.liveState.lastUpdatedDhakaText ?: "Never"
-                    val fbTimeStr = crexState.footballState.lastUpdatedDhakaText ?: "Never"
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                    Column(
+                    // Football (ESPN) Sync Toggle
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(NavyDark)
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "• CREX Live: ${crexState.liveState.matches.size} matches (Last: $liveTimeStr)${if (crexState.liveState.isStale) " [STALE CACHE]" else ""}",
-                            style = MaterialTheme.typography.labelSmall.copy(color = TextPrimary)
-                        )
-                        crexState.liveState.errorMessage?.let { err ->
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "  ⚠ CREX Live Error: $err",
-                                style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontWeight = FontWeight.Bold)
+                                text = "Football Provider Sync (ESPN Scoreboard)",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
                             )
-                        }
-                        Text(
-                            text = "• CREX Upcoming: ${crexState.upcomingState.matches.size} matches • Finished: ${crexState.finishedState.matches.size} matches",
-                            style = MaterialTheme.typography.labelSmall.copy(color = TextPrimary)
-                        )
-                        crexState.upcomingState.errorMessage?.let { err ->
+                            val espnDiag = providerDiagnostics.find { it.providerName.contains("ESPN", ignoreCase = true) }
+                            val lastSyncStr = espnDiag?.lastSyncEpochMs?.takeIf { it > 0 }?.let { dhakaTimeFormatter.format(Date(it)) } ?: "Never"
                             Text(
-                                text = "  ⚠ CREX Upcoming Error: $err",
-                                style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontWeight = FontWeight.Bold)
+                                text = "Status: ${espnDiag?.statusText ?: "IDLE"} • Matches: ${espnDiag?.activeMatchCount ?: 0} • Last: $lastSyncStr",
+                                style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontSize = 10.sp)
                             )
+                            espnDiag?.lastError?.takeIf { it.isNotBlank() }?.let { err ->
+                                Text(text = "Error: $err", style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontSize = 10.sp))
+                            }
                         }
-                        crexState.finishedState.errorMessage?.let { err ->
-                            Text(
-                                text = "  ⚠ CREX Finished Error: $err",
-                                style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontWeight = FontWeight.Bold)
-                            )
-                        }
-                        Text(
-                            text = "• Football Provider: ${crexState.footballState.matches.size} matches (Last: $fbTimeStr)${if (crexState.footballState.isStale) " [STALE CACHE]" else ""}",
-                            style = MaterialTheme.typography.labelSmall.copy(color = TextPrimary)
-                        )
-                        crexState.footballState.errorMessage?.let { err ->
-                            Text(
-                                text = "  ⚠ Football Provider Error: $err",
-                                style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontWeight = FontWeight.Bold)
-                            )
-                        }
-                        if (unmatchedAssociations.isNotEmpty()) {
-                            Text(
-                                text = "  ⚠ ${unmatchedAssociations.size} unmatched stream/favourite association(s) preserved (see Live Matches tab).",
-                                style = MaterialTheme.typography.labelSmall.copy(color = GoldYellow, fontWeight = FontWeight.Bold)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Sync category toggles
-                    Text(
-                        text = "PROVIDER SYNC CONTROLS",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = CyanAccent,
-                            fontSize = 11.sp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(
-                            selected = config.syncLiveEnabled,
-                            onClick = { onUpdateConfig(config.copy(syncLiveEnabled = !config.syncLiveEnabled)) },
-                            label = { Text("CREX Live", fontSize = 11.sp) }
-                        )
-                        FilterChip(
-                            selected = config.syncUpcomingEnabled,
-                            onClick = { onUpdateConfig(config.copy(syncUpcomingEnabled = !config.syncUpcomingEnabled)) },
-                            label = { Text("CREX Upcoming", fontSize = 11.sp) }
-                        )
-                        FilterChip(
-                            selected = config.syncFinishedEnabled,
-                            onClick = { onUpdateConfig(config.copy(syncFinishedEnabled = !config.syncFinishedEnabled)) },
-                            label = { Text("CREX Finished", fontSize = 11.sp) }
-                        )
-                        FilterChip(
-                            selected = config.syncFootballEnabled,
-                            onClick = { onUpdateConfig(config.copy(syncFootballEnabled = !config.syncFootballEnabled)) },
-                            label = { Text("Football Feed", fontSize = 11.sp) }
+                        Switch(
+                            checked = config.footballSyncEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateConfig(config.copy(footballSyncEnabled = enabled))
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = CyanAccent)
                         )
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    // Cricket (CREX) Sync Toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(NavyDark)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Cricket Provider Sync (CREX International)",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
+                            )
+                            val crexDiag = providerDiagnostics.find { it.providerName.contains("CREX", ignoreCase = true) }
+                            val lastSyncStr = crexDiag?.lastSyncEpochMs?.takeIf { it > 0 }?.let { dhakaTimeFormatter.format(Date(it)) } ?: "Never"
+                            Text(
+                                text = "Status: ${crexDiag?.statusText ?: "IDLE"} • Matches: ${crexDiag?.activeMatchCount ?: 0} • Last: $lastSyncStr",
+                                style = MaterialTheme.typography.labelSmall.copy(color = GoldYellow, fontSize = 10.sp)
+                            )
+                            crexDiag?.lastError?.takeIf { it.isNotBlank() }?.let { err ->
+                                Text(text = "Error: $err", style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontSize = 10.sp))
+                            }
+                        }
+                        Switch(
+                            checked = config.cricketSyncEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateConfig(config.copy(cricketSyncEnabled = enabled))
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = GoldYellow)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Auto-refresh interval selector
                     Text(
-                        text = "AUTO-REFRESH INTERVAL (LIVE POLLING)",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextSecondary,
-                            fontSize = 10.sp
-                        )
+                        text = "AUTO-REFRESH INTERVAL (LIVE MATCHES)",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        listOf(15, 30, 60, 120).forEach { sec ->
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15, 25, 30, 60).forEach { sec ->
+                            val selected = config.autoRefreshIntervalSec == sec
                             FilterChip(
-                                selected = config.autoRefreshIntervalSeconds == sec,
-                                onClick = { onUpdateConfig(config.copy(autoRefreshIntervalSeconds = sec)) },
-                                label = { Text("${sec}s", fontSize = 11.sp) }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Football Competition Allowlist
-                    Text(
-                        text = "FOOTBALL COMPETITION ALLOWLIST (VERIFIED LEAGUES)",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = GoldYellow,
-                            fontSize = 10.sp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AppConfig.VERIFIED_FOOTBALL_LEAGUE_LABELS.forEach { (code, label) ->
-                            val isEnabled = config.enabledFootballLeagues.contains(code)
-                            FilterChip(
-                                selected = isEnabled,
-                                onClick = {
-                                    val updated = if (isEnabled) {
-                                        (config.enabledFootballLeagues - code).ifEmpty { listOf(code) }
-                                    } else {
-                                        config.enabledFootballLeagues + code
-                                    }
-                                    onUpdateConfig(config.copy(enabledFootballLeagues = updated))
-                                },
-                                label = { Text(label, fontSize = 10.sp) }
+                                selected = selected,
+                                onClick = { onUpdateConfig(config.copy(autoRefreshIntervalSec = sec)) },
+                                label = { Text("${sec}s", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CyanAccent,
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = NavyDark,
+                                    labelColor = TextSecondary
+                                )
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Button(
-                        onClick = {
-                            isSyncingRemote = true
-                            syncStatusMessage = null
-                            coroutineScope.launch {
-                                val res = onSyncRemote(remoteFeedUrl)
-                                isSyncingRemote = false
-                                syncStatusMessage = res.fold(
-                                    onSuccess = { "Synced $it verified matches (Asia/Dhaka 3-day window)" },
-                                    onFailure = { "Provider sync error: ${it.localizedMessage}" }
-                                )
-                            }
-                        },
-                        enabled = !isSyncingRemote,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("admin_manual_provider_sync_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                        shape = RoundedCornerShape(10.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Trigger Manual Provider Sync Now", color = Color.Black, fontWeight = FontWeight.Bold)
+                        OutlinedButton(
+                            onClick = { showFootballLeagueModal = true },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(CyanAccent)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
+                        ) {
+                            Icon(Icons.Default.SportsSoccer, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Leagues (${config.enabledFootballLeagues.size}/${EspnFootballService.VERIFIED_COMPETITIONS.size})",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                isSyncingProviders = true
+                                coroutineScope.launch {
+                                    onTriggerProviderSync?.invoke()
+                                    isSyncingProviders = false
+                                }
+                            },
+                            enabled = !isSyncingProviders,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isSyncingProviders) {
+                                CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Syncing...", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Manual Sync Now", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
@@ -1773,15 +1713,15 @@ fun AppSettingsTab(
 
                         Button(
                             onClick = {
-                                remoteFeedUrl = ""
-                                onUpdateConfig(config.copy(remoteFeedUrl = ""))
+                                remoteFeedUrl = "https://raw.githubusercontent.com/freefirejafor-wq/Upder/main/matches.json"
+                                onUpdateConfig(config.copy(remoteFeedUrl = remoteFeedUrl))
                                 showSampleJsonModal = false
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = NavySurfaceVariant),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Clear Custom URL", color = CyanAccent, fontWeight = FontWeight.SemiBold)
+                            Text("Use Demo URL", color = CyanAccent, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -1877,6 +1817,147 @@ fun AppSettingsTab(
                         Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Copy Full JSON to Clipboard", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showFootballLeagueModal) {
+        Dialog(onDismissRequest = { showFootballLeagueModal = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.88f)
+                    .border(1.dp, CyanAccent, RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavyDark),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "ESPN Football Competitions",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                            )
+                            Text(
+                                text = "Select which senior international & club competitions to sync",
+                                style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp)
+                            )
+                        }
+                        IconButton(onClick = { showFootballLeagueModal = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onUpdateConfig(
+                                    config.copy(
+                                        enabledFootballLeagues = EspnFootballService.VERIFIED_COMPETITIONS.map { it.leagueId }.toSet()
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Enable All (${EspnFootballService.VERIFIED_COMPETITIONS.size})", color = CyanAccent, fontSize = 11.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                onUpdateConfig(
+                                    config.copy(
+                                        enabledFootballLeagues = setOf(
+                                            "uefa.champions",
+                                            "fifa.worldq.uefa",
+                                            "fifa.worldq.conmebol",
+                                            "uefa.nations",
+                                            "eng.1",
+                                            "esp.1",
+                                            "ita.1",
+                                            "ger.1",
+                                            "fra.1"
+                                        )
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Core 9 Only", color = GoldYellow, fontSize = 11.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(EspnFootballService.VERIFIED_COMPETITIONS, key = { it.leagueId }) { comp ->
+                            val isEnabled = config.enabledFootballLeagues.contains(comp.leagueId)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(NavySurface)
+                                    .clickable {
+                                        val updated = if (isEnabled) {
+                                            config.enabledFootballLeagues - comp.leagueId
+                                        } else {
+                                            config.enabledFootballLeagues + comp.leagueId
+                                        }
+                                        onUpdateConfig(config.copy(enabledFootballLeagues = updated))
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = comp.name,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                    Text(
+                                        text = "${comp.category} • ID: ${comp.leagueId}",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = if (comp.isNationalTeam) GoldYellow else CyanAccent,
+                                            fontSize = 10.sp
+                                        )
+                                    )
+                                }
+                                Checkbox(
+                                    checked = isEnabled,
+                                    onCheckedChange = { checked ->
+                                        val updated = if (checked) {
+                                            config.enabledFootballLeagues + comp.leagueId
+                                        } else {
+                                            config.enabledFootballLeagues - comp.leagueId
+                                        }
+                                        onUpdateConfig(config.copy(enabledFootballLeagues = updated))
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = CyanAccent, checkmarkColor = Color.Black)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2007,8 +2088,7 @@ fun AddChannelModalDialog(
                                 streamsList = streamsList + StreamSource(
                                     name = "SERVER $nextNum (FHD)",
                                     quality = "FHD",
-                                    url = "",
-                                    displayOrder = streamsList.size
+                                    url = ""
                                 )
                             }
                         ) {
@@ -2039,7 +2119,7 @@ fun AddChannelModalDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "Stream #${index + 1} (Order: ${s.displayOrder})",
+                                    text = "Stream #${index + 1}",
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         color = TextSecondary,
                                         fontWeight = FontWeight.Bold
@@ -2095,40 +2175,68 @@ fun AddChannelModalDialog(
                                 singleLine = true
                             )
 
-                            // Stream status chips: Enabled, Authorized, Primary vs Backup, Order
+                            // Stream Enable, Backup & Priority controls
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    .padding(top = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                FilterChip(
-                                    selected = s.isEnabled,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isEnabled = !s.isEnabled)
-                                        }
-                                    },
-                                    label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = s.isAuthorized,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isAuthorized = !s.isAuthorized)
-                                        }
-                                    },
-                                    label = { Text(if (s.isAuthorized) "Authorized" else "Unauthorized", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = s.isBackup,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isBackup = !s.isBackup)
-                                        }
-                                    },
-                                    label = { Text(if (s.isBackup) "Backup Server" else "Primary Server", fontSize = 10.sp) }
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FilterChip(
+                                        selected = s.isEnabled,
+                                        onClick = {
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(isEnabled = !s.isEnabled)
+                                            }
+                                        },
+                                        label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = LiveGreen.copy(alpha = 0.2f),
+                                            selectedLabelColor = LiveGreen
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    FilterChip(
+                                        selected = s.isBackup,
+                                        onClick = {
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(isBackup = !s.isBackup)
+                                            }
+                                        },
+                                        label = { Text(if (s.isBackup) "Backup" else "Primary", fontSize = 10.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = GoldYellow.copy(alpha = 0.2f),
+                                            selectedLabelColor = GoldYellow
+                                        )
+                                    )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            val newPriority = (s.priorityOrder - 1).coerceAtLeast(0)
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(priorityOrder = newPriority)
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
+                                    }
+                                    Text("P:${s.priorityOrder}", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    IconButton(
+                                        onClick = {
+                                            val newPriority = s.priorityOrder + 1
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(priorityOrder = newPriority)
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
+                                    }
+                                }
                             }
 
                             // Quick check button
@@ -2226,26 +2334,15 @@ fun AddMatchModalDialog(
     var matchTime by remember(matchToEdit) { mutableStateOf(matchToEdit?.matchTime ?: "Today, 09:00 PM") }
     var status by remember(matchToEdit) { mutableStateOf(matchToEdit?.status ?: MatchStatus.LIVE) }
 
-    val isClubFootball = remember(sport, tournament) {
-        val tUpper = tournament.uppercase()
-        sport == SportType.FOOTBALL &&
-            !tUpper.contains("WORLD CUP") &&
-            !tUpper.contains("EURO") &&
-            !tUpper.contains("COPA AMERICA") &&
-            !tUpper.contains("NATIONS LEAGUE") &&
-            !tUpper.contains("INTL") &&
-            !tUpper.contains("INTERNATIONAL")
-    }
-
     var streamsList by remember(matchToEdit) {
         mutableStateOf(
             if (matchToEdit != null && matchToEdit.streams.isNotEmpty()) {
                 matchToEdit.streams
             } else {
                 listOf(
-                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true, displayOrder = 0),
-                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", displayOrder = 1),
-                    StreamSource(name = "TAPMAD FHD", quality = "FHD", url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8", isBackup = true, displayOrder = 2)
+                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
+                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
+                    StreamSource(name = "TAPMAD FHD", quality = "FHD", url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8")
                 )
             }
         )
@@ -2297,10 +2394,7 @@ fun AddMatchModalDialog(
                             value = team1Name,
                             onValueChange = {
                                 team1Name = it
-                                val resolved = com.example.data.util.TeamFlagResolver.resolve(
-                                    teamName = it,
-                                    isClubFootball = isClubFootball
-                                )
+                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
                                 if (resolved.flagUrl.isNotBlank()) {
                                     team1Code = resolved.code
                                     team1Flag = resolved.flagUrl
@@ -2318,7 +2412,7 @@ fun AddMatchModalDialog(
                         OutlinedTextField(
                             value = team1Flag,
                             onValueChange = { team1Flag = it },
-                            label = { Text("Flag/Crest URL") },
+                            label = { Text("Flag URL/Emoji") },
                             modifier = Modifier.weight(1.2f),
                             singleLine = true
                         )
@@ -2332,10 +2426,7 @@ fun AddMatchModalDialog(
                             value = team2Name,
                             onValueChange = {
                                 team2Name = it
-                                val resolved = com.example.data.util.TeamFlagResolver.resolve(
-                                    teamName = it,
-                                    isClubFootball = isClubFootball
-                                )
+                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
                                 if (resolved.flagUrl.isNotBlank()) {
                                     team2Code = resolved.code
                                     team2Flag = resolved.flagUrl
@@ -2353,7 +2444,7 @@ fun AddMatchModalDialog(
                         OutlinedTextField(
                             value = team2Flag,
                             onValueChange = { team2Flag = it },
-                            label = { Text("Flag/Crest URL") },
+                            label = { Text("Flag URL/Emoji") },
                             modifier = Modifier.weight(1.2f),
                             singleLine = true
                         )
@@ -2444,8 +2535,7 @@ fun AddMatchModalDialog(
                                 streamsList = streamsList + StreamSource(
                                     name = "SERVER $nextNum (FHD)",
                                     quality = "FHD",
-                                    url = "",
-                                    displayOrder = streamsList.size
+                                    url = ""
                                 )
                             }
                         ) {
@@ -2475,7 +2565,7 @@ fun AddMatchModalDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Stream Server #${index + 1} (Order: ${s.displayOrder})", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
+                                Text("Stream Server #${index + 1}", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
                                 if (streamsList.size > 1) {
                                     IconButton(
                                         onClick = { streamsList = streamsList.filterIndexed { i, _ -> i != index } },
@@ -2517,40 +2607,70 @@ fun AddMatchModalDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
+                            // Stream Enable, Backup & Priority controls
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    .padding(top = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                FilterChip(
-                                    selected = s.isEnabled,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isEnabled = !s.isEnabled)
-                                        }
-                                    },
-                                    label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = s.isAuthorized,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isAuthorized = !s.isAuthorized)
-                                        }
-                                    },
-                                    label = { Text(if (s.isAuthorized) "Authorized" else "Unauthorized", fontSize = 10.sp) }
-                                )
-                                FilterChip(
-                                    selected = s.isBackup,
-                                    onClick = {
-                                        streamsList = streamsList.toMutableList().also { list ->
-                                            list[index] = list[index].copy(isBackup = !s.isBackup)
-                                        }
-                                    },
-                                    label = { Text(if (s.isBackup) "Backup" else "Primary", fontSize = 10.sp) }
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FilterChip(
+                                        selected = s.isEnabled,
+                                        onClick = {
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(isEnabled = !s.isEnabled)
+                                            }
+                                        },
+                                        label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = LiveGreen.copy(alpha = 0.2f),
+                                            selectedLabelColor = LiveGreen
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    FilterChip(
+                                        selected = s.isBackup,
+                                        onClick = {
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(isBackup = !s.isBackup)
+                                            }
+                                        },
+                                        label = { Text(if (s.isBackup) "Backup" else "Primary", fontSize = 10.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = GoldYellow.copy(alpha = 0.2f),
+                                            selectedLabelColor = GoldYellow
+                                        )
+                                    )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            val newPriority = (s.priorityOrder - 1).coerceAtLeast(0)
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(priorityOrder = newPriority)
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
+                                    }
+                                    Text("P:${s.priorityOrder}", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    IconButton(
+                                        onClick = {
+                                            val newPriority = s.priorityOrder + 1
+                                            streamsList = streamsList.toMutableList().also { list ->
+                                                list[index] = list[index].copy(priorityOrder = newPriority)
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
+                                    }
+                                }
                             }
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2597,18 +2717,9 @@ fun AddMatchModalDialog(
                         Button(
                             onClick = {
                                 if (team1Name.isNotBlank() && team2Name.isNotBlank()) {
-                                    val v1 = com.example.data.util.TeamFlagResolver.resolve(
-                                        teamName = team1Name,
-                                        teamCode = team1Code,
-                                        existingFlag = team1Flag,
-                                        isClubFootball = isClubFootball
-                                    )
-                                    val v2 = com.example.data.util.TeamFlagResolver.resolve(
-                                        teamName = team2Name,
-                                        teamCode = team2Code,
-                                        existingFlag = team2Flag,
-                                        isClubFootball = isClubFootball
-                                    )
+                                    val isNat = matchToEdit?.isNationalTeam ?: (sport == SportType.CRICKET)
+                                    val v1 = com.example.data.util.TeamFlagResolver.resolveForMatch(team1Name, team1Code, team1Flag, isNationalTeam = isNat)
+                                    val v2 = com.example.data.util.TeamFlagResolver.resolveForMatch(team2Name, team2Code, team2Flag, isNationalTeam = isNat)
                                     onSaveMatch(
                                         LiveMatch(
                                             id = matchToEdit?.id ?: UUID.randomUUID().toString(),
@@ -2625,7 +2736,13 @@ fun AddMatchModalDialog(
                                             matchTime = matchTime.ifBlank { "Today" },
                                             streams = streamsList.filter { it.url.isNotBlank() },
                                             isFavorite = matchToEdit?.isFavorite ?: false,
-                                            startTimeEpochMs = matchToEdit?.startTimeEpochMs ?: System.currentTimeMillis()
+                                            provider = matchToEdit?.provider ?: "ADMIN",
+                                            competitionId = matchToEdit?.competitionId ?: "",
+                                            startTimeEpochMs = matchToEdit?.startTimeEpochMs ?: System.currentTimeMillis(),
+                                            isNationalTeam = isNat,
+                                            sofascoreEventId = matchToEdit?.sofascoreEventId,
+                                            broadcastChannels = matchToEdit?.broadcastChannels ?: emptyList(),
+                                            approvedHighlightUrl = matchToEdit?.approvedHighlightUrl
                                         )
                                     )
                                 }

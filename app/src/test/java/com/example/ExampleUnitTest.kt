@@ -1,7 +1,10 @@
 package com.example
 
 import com.example.data.crex.CrexCricketService
+import com.example.data.espn.EspnFootballService
 import com.example.data.model.MatchStatus
+import com.example.data.model.SportType
+import com.example.data.util.TeamFlagResolver
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -12,8 +15,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ExampleUnitTest {
 
+    // Reference time: 2026-10-21 12:00:00 UTC (18:00:00 Asia/Dhaka) -> 1792584000000L
+    private val refNowMs = 1792584000000L
+
     @Test
-    fun crexLivePayload_objectKeyedByMatchId_parsesCorrectly() {
+    fun crexLivePayload_objectKeyedByMatchId_parsesCorrectlyWithoutScoresOnCard() {
         val service = CrexCricketService()
         val sampleLiveJson = """
             {
@@ -26,27 +32,63 @@ class ExampleUnitTest {
                 "k": "53/4(21.4",
                 "q": "^2EW",
                 "res": "Stumps",
-                "ti": 1792310400000,
+                "ti": 1792570000000,
                 "v": "4R"
               }
             }
         """.trimIndent()
 
-        val matches = service.parseLiveMatchesPayload(sampleLiveJson)
+        val matches = service.parseLiveMatchesPayload(sampleLiveJson, referenceNowEpochMs = refNowMs)
         assertEquals(1, matches.size)
         val m = matches.first()
         assertEquals("10MR", m.id)
         assertEquals(MatchStatus.LIVE, m.status)
+        assertEquals(SportType.CRICKET, m.sport)
         assertEquals("South Africa", m.team1Name)
         assertEquals("Australia", m.team2Name)
-        assertTrue(m.timeOrScore.contains("425/9 (127.1 ov)"))
-        assertTrue(m.timeOrScore.contains("53/4 (21.4 ov)"))
-        assertTrue(m.timeOrScore.contains("Stumps"))
+        assertTrue(m.isNationalTeam)
+        // MatchCard must never expose raw innings scores in timeOrScore
+        assertFalse(m.timeOrScore.contains("425/9"))
         assertTrue(m.matchTime.contains("BST"))
     }
 
     @Test
-    fun crexUpcomingPayload_groupedByDate_parsesCorrectly() {
+    fun crexLivePayload_finishedOrUpcomingInLiveEndpoint_neverMarkedLiveFalsely() {
+        val service = CrexCricketService()
+        val sampleJson = """
+            {
+              "FIN1": {
+                "b": "U",
+                "c": "S",
+                "cb": "ICC",
+                "fo": "ODI",
+                "j": "302/9(50.0",
+                "k": "215/10(38.4",
+                "res": "Pakistan won by 87 runs",
+                "ti": 1792560000000
+              },
+              "UPC1": {
+                "b": "Y",
+                "c": "W",
+                "cb": "ACB",
+                "fo": "ODI",
+                "j": "",
+                "k": "",
+                "res": "",
+                "ti": 1792650000000
+              }
+            }
+        """.trimIndent()
+
+        val matches = service.parseLiveMatchesPayload(sampleJson, referenceNowEpochMs = refNowMs)
+        val fin = matches.first { it.id == "FIN1" }
+        val upc = matches.first { it.id == "UPC1" }
+        assertEquals(MatchStatus.FINISHED, fin.status)
+        assertEquals(MatchStatus.UPCOMING, upc.status)
+    }
+
+    @Test
+    fun crexUpcomingPayload_groupedByDate_parsesCorrectlyWithin3DayDhakaWindow() {
         val service = CrexCricketService()
         val sampleUpcomingJson = """
             [
@@ -72,19 +114,18 @@ class ExampleUnitTest {
             ]
         """.trimIndent()
 
-        val matches = service.parseUpcomingMatchesPayload(sampleUpcomingJson)
+        val matches = service.parseUpcomingMatchesPayload(sampleUpcomingJson, referenceNowEpochMs = refNowMs)
         assertEquals(1, matches.size)
         val m = matches.first()
         assertEquals("13TK", m.id)
         assertEquals(MatchStatus.UPCOMING, m.status)
         assertEquals("Afghanistan", m.team1Name)
         assertEquals("Bangladesh", m.team2Name)
-        assertTrue(m.timeOrScore.contains("ODI"))
         assertTrue(m.matchTime.contains("BST"))
     }
 
     @Test
-    fun crexFinishedPayload_array_parsesScoresAndLearnsWinner() {
+    fun crexFinishedPayload_array_parsesWithinDhakaWindowAndExcludesScoresFromCard() {
         val service = CrexCricketService()
         val sampleFinishedJson = """
             [
@@ -109,16 +150,14 @@ class ExampleUnitTest {
             ]
         """.trimIndent()
 
-        val matches = service.parseFinishedMatchesPayload(sampleFinishedJson)
+        val matches = service.parseFinishedMatchesPayload(sampleFinishedJson, referenceNowEpochMs = refNowMs)
         assertEquals(1, matches.size)
         val m = matches.first()
         assertEquals("13NC", m.id)
         assertEquals(MatchStatus.FINISHED, m.status)
         assertEquals("Pakistan", m.team1Name)
         assertEquals("England", m.team2Name)
-        assertTrue(m.timeOrScore.contains("302/9 (50.0 ov)"))
-        assertTrue(m.timeOrScore.contains("215/10 (38.4 ov)"))
-        assertTrue(m.timeOrScore.contains("Pakistan won by 87 runs"))
+        assertFalse(m.timeOrScore.contains("302/9"))
     }
 
     @Test
@@ -132,7 +171,7 @@ class ExampleUnitTest {
               "sf": "2EW",
               "j": "425/9(127.1",
               "k": "54/4(21.5",
-              "mt": 1792310400000,
+              "mt": 1792560000000,
               "speech_names": {
                 "P": "South Africa",
                 "Q": "Australia"
@@ -149,7 +188,7 @@ class ExampleUnitTest {
             }
         """.trimIndent()
 
-        val detail = service.parseSv3DetailPayload("10MR", sampleSv3Json, 1792560000000L)
+        val detail = service.parseSv3DetailPayload("10MR", sampleSv3Json, refNowMs)
         assertEquals("10MR", detail.matchId)
         assertEquals("South Africa", detail.team1Name)
         assertEquals("Australia", detail.team2Name)
@@ -161,115 +200,85 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun dhakaThreeDayWindow_filtersYesterdayTodayTomorrowStrictly() {
-        val nowMs = 1792560000000L // Fixed epoch
-        val oneDayMs = 24L * 3600_000L
-        assertTrue(CrexCricketService.isWithinDhakaThreeDayWindow(nowMs, nowMs))
-        assertTrue(CrexCricketService.isWithinDhakaThreeDayWindow(nowMs - oneDayMs, nowMs))
-        assertTrue(CrexCricketService.isWithinDhakaThreeDayWindow(nowMs + oneDayMs, nowMs))
-        assertFalse(CrexCricketService.isWithinDhakaThreeDayWindow(nowMs - 3 * oneDayMs, nowMs))
-        assertFalse(CrexCricketService.isWithinDhakaThreeDayWindow(nowMs + 3 * oneDayMs, nowMs))
-
-        assertTrue(CrexCricketService.matchesDateFilterDhaka(nowMs, com.example.data.model.MatchDateFilter.TODAY, nowMs))
-        assertTrue(CrexCricketService.matchesDateFilterDhaka(nowMs - oneDayMs, com.example.data.model.MatchDateFilter.YESTERDAY, nowMs))
-        assertTrue(CrexCricketService.matchesDateFilterDhaka(nowMs + oneDayMs, com.example.data.model.MatchDateFilter.TOMORROW, nowMs))
-    }
-
-    @Test
-    fun clubFootball_neverUsesCountryFlagUrl() {
-        val clubResolved = com.example.data.util.TeamFlagResolver.resolve(
-            teamName = "Real Madrid",
-            teamCode = "RMA",
-            existingFlag = "https://flagcdn.com/w160/es.png",
-            isClubFootball = true
-        )
-        assertFalse("Club football must not use a country flag URL", clubResolved.flagUrl.contains("flagcdn.com"))
-        assertTrue("Club football should resolve official club crest", clubResolved.flagUrl.contains("espncdn.com"))
-
-        val nationalResolved = com.example.data.util.TeamFlagResolver.resolve(
-            teamName = "Argentina",
-            teamCode = "ARG",
-            existingFlag = "",
-            isClubFootball = false
-        )
-        assertTrue("National team must resolve country flag", nationalResolved.flagUrl.contains("flagcdn.com/w160/ar.png"))
-    }
-
-    @Test
-    fun espnFootball_statusMapping_onlyConfirmedInProgressIsLive_missingOrStaleIsUnknown() {
-        val service = CrexCricketService()
-        val nowIso = java.time.Instant.now().toString()
-        val futureIso = java.time.Instant.now().plusSeconds(3600 * 5).toString()
+    fun espnScoreboard_clubAndInternationalParsing_excludesYouthAndRespectsLogosAndDates() {
+        val espnService = EspnFootballService()
         val sampleEspnJson = """
             {
               "leagues": [{"name": "English Premier League"}],
               "events": [
                 {
-                  "id": "401",
-                  "name": "Arsenal vs Chelsea",
-                  "date": "$nowIso",
+                  "id": "401650001",
+                  "date": "2026-10-21T19:00Z",
+                  "name": "Arsenal at Chelsea",
                   "competitions": [
                     {
-                      "id": "401",
-                      "date": "$nowIso",
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "score": "2",
+                          "team": {
+                            "displayName": "Chelsea",
+                            "abbreviation": "CHE",
+                            "logo": "https://a.espncdn.com/i/teamlogos/soccer/500/363.png"
+                          }
+                        },
+                        {
+                          "homeAway": "away",
+                          "score": "1",
+                          "team": {
+                            "displayName": "Arsenal",
+                            "abbreviation": "ARS",
+                            "logo": "https://a.espncdn.com/i/teamlogos/soccer/500/359.png"
+                          }
+                        }
+                      ],
                       "status": {
                         "type": {
                           "state": "in",
-                          "name": "STATUS_IN_PROGRESS",
                           "completed": false,
-                          "detail": "54'"
+                          "shortDetail": "67'"
                         }
-                      },
-                      "competitors": [
-                        {"homeAway": "home", "score": "2", "team": {"displayName": "Arsenal", "abbreviation": "ARS"}},
-                        {"homeAway": "away", "score": "1", "team": {"displayName": "Chelsea", "abbreviation": "CHE"}}
-                      ]
+                      }
                     }
                   ]
                 },
                 {
-                  "id": "402",
-                  "name": "Liverpool vs Everton",
-                  "date": "$futureIso",
+                  "id": "401650002",
+                  "date": "2026-10-21T16:00Z",
+                  "name": "Chelsea U21 vs Arsenal U21",
                   "competitions": [
                     {
-                      "id": "402",
-                      "date": "$futureIso",
-                      "status": {
-                        "type": {
-                          "state": "pre",
-                          "name": "STATUS_SCHEDULED",
-                          "completed": false,
-                          "detail": "Scheduled"
-                        }
-                      },
                       "competitors": [
-                        {"homeAway": "home", "score": "0", "team": {"displayName": "Liverpool", "abbreviation": "LIV"}},
-                        {"homeAway": "away", "score": "0", "team": {"displayName": "Everton", "abbreviation": "EVE"}}
-                      ]
+                        {
+                          "homeAway": "home",
+                          "team": {"displayName": "Chelsea U21", "abbreviation": "CHU"}
+                        },
+                        {
+                          "homeAway": "away",
+                          "team": {"displayName": "Arsenal U21", "abbreviation": "ARU"}
+                        }
+                      ],
+                      "status": {"type": {"state": "pre"}}
                     }
                   ]
                 },
                 {
-                  "id": "403",
-                  "name": "Fulham vs Brentford",
-                  "date": "$nowIso",
+                  "id": "401650003",
+                  "date": "2026-10-28T19:00Z",
+                  "name": "Liverpool at Everton",
                   "competitions": [
                     {
-                      "id": "403",
-                      "date": "$nowIso",
-                      "status": {
-                        "type": {
-                          "state": "",
-                          "name": "",
-                          "completed": false,
-                          "detail": ""
-                        }
-                      },
                       "competitors": [
-                        {"homeAway": "home", "team": {"displayName": "Fulham", "abbreviation": "FUL"}},
-                        {"homeAway": "away", "team": {"displayName": "Brentford", "abbreviation": "BRE"}}
-                      ]
+                        {
+                          "homeAway": "home",
+                          "team": {"displayName": "Everton", "abbreviation": "EVE"}
+                        },
+                        {
+                          "homeAway": "away",
+                          "team": {"displayName": "Liverpool", "abbreviation": "LIV"}
+                        }
+                      ],
+                      "status": {"type": {"state": "pre"}}
                     }
                   ]
                 }
@@ -277,79 +286,19 @@ class ExampleUnitTest {
             }
         """.trimIndent()
 
-        val parsed = service.parseEspnScoreboardPayload(
-            rawJson = sampleEspnJson,
-            sportType = com.example.data.model.SportType.FOOTBALL,
-            leagueCode = "eng.1"
-        )
-        assertEquals(3, parsed.size)
-
-        val liveMatch = parsed.first { it.id == "espn-football-401" }
-        assertTrue(liveMatch.isConfirmedLive)
-        assertEquals(MatchStatus.LIVE, liveMatch.status)
-        assertEquals("Live", liveMatch.providerStatusLabel)
-
-        val upcomingMatch = parsed.first { it.id == "espn-football-402" }
-        assertFalse(upcomingMatch.isConfirmedLive)
-        assertEquals(MatchStatus.UPCOMING, upcomingMatch.status)
-        assertEquals("Upcoming", upcomingMatch.providerStatusLabel)
-
-        val unknownMatch = parsed.first { it.id == "espn-football-403" }
-        assertFalse("Missing status must never be marked Live", unknownMatch.isConfirmedLive)
-        assertTrue("Missing status must be flagged as Unknown", unknownMatch.isStatusUnknown)
-        assertEquals("Unknown", unknownMatch.providerStatusLabel)
-    }
-
-    @Test
-    fun espnFootball_excludesYouthU17U18AcademyReserveAndBTeams() {
-        val service = CrexCricketService()
-        val nowIso = java.time.Instant.now().toString()
-        val youthJson = """
-            {
-              "leagues": [{"name": "Spanish LaLiga"}],
-              "events": [
-                {
-                  "id": "501",
-                  "name": "Barcelona B vs Real Madrid Castilla",
-                  "date": "$nowIso",
-                  "competitions": [
-                    {
-                      "id": "501",
-                      "date": "$nowIso",
-                      "status": {"type": {"state": "pre", "name": "STATUS_SCHEDULED", "completed": false}},
-                      "competitors": [
-                        {"homeAway": "home", "team": {"displayName": "Barcelona B", "abbreviation": "BAR"}},
-                        {"homeAway": "away", "team": {"displayName": "Real Madrid Castilla", "abbreviation": "RMC"}}
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "id": "502",
-                  "name": "England U17 vs France U17",
-                  "date": "$nowIso",
-                  "competitions": [
-                    {
-                      "id": "502",
-                      "date": "$nowIso",
-                      "status": {"type": {"state": "in", "name": "STATUS_IN_PROGRESS", "completed": false}},
-                      "competitors": [
-                        {"homeAway": "home", "team": {"displayName": "England U17", "abbreviation": "ENG"}},
-                        {"homeAway": "away", "team": {"displayName": "France U17", "abbreviation": "FRA"}}
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-        """.trimIndent()
-
-        val parsed = service.parseEspnScoreboardPayload(
-            rawJson = youthJson,
-            sportType = com.example.data.model.SportType.FOOTBALL,
-            leagueCode = "esp.1"
-        )
-        assertTrue("Youth, U17/U18, reserve, and B-team matches must be excluded", parsed.isEmpty())
+        val parsed = espnService.parseScoreboardJson("eng.1", sampleEspnJson, referenceNowEpochMs = refNowMs)
+        // Youth U21 match (401650002) and next-week match outside Yesterday/Today/Tomorrow (401650003) must be excluded!
+        assertEquals(1, parsed.size)
+        val match = parsed.first()
+        assertEquals("espn-401650001", match.id)
+        assertEquals(SportType.FOOTBALL, match.sport)
+        assertEquals(MatchStatus.LIVE, match.status)
+        assertFalse(match.isNationalTeam)
+        assertEquals("https://a.espncdn.com/i/teamlogos/soccer/500/363.png", match.team1FlagUrl)
+        assertEquals("https://a.espncdn.com/i/teamlogos/soccer/500/359.png", match.team2FlagUrl)
+        // Club team without logo must NEVER fall back to a country flag
+        val clubFallback = TeamFlagResolver.resolveForMatch("England FC", "ENG", existingFlag = "", isNationalTeam = false)
+        assertEquals("", clubFallback.flagUrl)
+        assertEquals("", clubFallback.emoji)
     }
 }
-

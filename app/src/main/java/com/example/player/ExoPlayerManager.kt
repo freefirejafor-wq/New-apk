@@ -52,9 +52,6 @@ class ExoPlayerManager(private val context: Context) {
     private val _playbackSpeed = MutableStateFlow(1.0f)
     val playbackSpeed: StateFlow<Float> = _playbackSpeed.asStateFlow()
 
-    private val _selectedQualityLabel = MutableStateFlow("Auto")
-    val selectedQualityLabel: StateFlow<String> = _selectedQualityLabel.asStateFlow()
-
     private var positionUpdateJob: kotlinx.coroutines.Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
@@ -163,32 +160,6 @@ class ExoPlayerManager(private val context: Context) {
         exoPlayer?.setPlaybackSpeed(speed)
     }
 
-    fun setVideoQualityConstraint(maxHeight: Int?, label: String) {
-        _selectedQualityLabel.value = label
-        exoPlayer?.let { player ->
-            player.trackSelectionParameters = if (maxHeight == null) {
-                player.trackSelectionParameters
-                    .buildUpon()
-                    .clearVideoSizeConstraints()
-                    .setMaxVideoBitrate(Int.MAX_VALUE)
-                    .build()
-            } else {
-                val maxWidth = (maxHeight * 16) / 9
-                val bitrate = when {
-                    maxHeight >= 1080 -> 8_000_000
-                    maxHeight >= 720 -> 4_000_000
-                    maxHeight >= 480 -> 1_500_000
-                    else -> 800_000
-                }
-                player.trackSelectionParameters
-                    .buildUpon()
-                    .setMaxVideoSize(maxWidth, maxHeight)
-                    .setMaxVideoBitrate(bitrate)
-                    .build()
-            }
-        }
-    }
-
     fun playStream(stream: StreamSource, forceLowQuality: Boolean = false) {
         if (stream.url.isBlank()) {
             _isBuffering.value = false
@@ -201,22 +172,21 @@ class ExoPlayerManager(private val context: Context) {
             _errorMessage.value = null
             _isBuffering.value = true
 
-            if (forceLowQuality) {
-                _selectedQualityLabel.value = "480p SD"
-                player.trackSelectionParameters = player.trackSelectionParameters
+            player.trackSelectionParameters = if (forceLowQuality) {
+                player.trackSelectionParameters
                     .buildUpon()
                     .setMaxVideoSizeSd()
                     .setMaxVideoBitrate(800_000)
                     .build()
-            } else if (_selectedQualityLabel.value == "Auto") {
-                player.trackSelectionParameters = player.trackSelectionParameters
+            } else {
+                player.trackSelectionParameters
                     .buildUpon()
                     .clearVideoSizeConstraints()
                     .setMaxVideoBitrate(Int.MAX_VALUE)
                     .build()
             }
 
-            val mediaSource = createMediaSource(stream)
+            val mediaSource = createMediaSource(stream, forceLowQuality)
             player.setMediaSource(mediaSource)
             player.prepare()
             player.playWhenReady = true
@@ -226,22 +196,18 @@ class ExoPlayerManager(private val context: Context) {
         }
     }
 
-    private fun createMediaSource(stream: StreamSource): MediaSource {
+    private fun createMediaSource(stream: StreamSource, forceLowQuality: Boolean): MediaSource {
         val uri = Uri.parse(stream.url.trim())
-        val userAgent = stream.userAgent?.takeIf { it.isNotBlank() } ?: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36"
+        val userAgent = stream.userAgent ?: "FootballLiveTV/7.3 (Linux; Android)"
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
-            .setConnectTimeoutMs(10_000)
-            .setReadTimeoutMs(10_000)
+            .setConnectTimeoutMs(8_000)
+            .setReadTimeoutMs(8_000)
             .setAllowCrossProtocolRedirects(true)
 
-        val headers = mutableMapOf<String, String>()
-        stream.referer?.takeIf { it.isNotBlank() }?.let { headers["Referer"] = it }
-        stream.origin?.takeIf { it.isNotBlank() }?.let { headers["Origin"] = it }
-        stream.cookie?.takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
-        if (headers.isNotEmpty()) {
-            httpDataSourceFactory.setDefaultRequestProperties(headers)
+        stream.referer?.let { referer ->
+            httpDataSourceFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
         }
 
         val isHls = stream.url.contains(".m3u8", ignoreCase = true) ||

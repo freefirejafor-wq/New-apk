@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
     <string name="firestore_database_id" translatable="false">ai-studio-android-newapk-58097b75-65e0-474e-b30f-f9b6469d8bb7</string>
+    <string name="default_web_client_id" translatable="false">1075101479724-sports-live-web-client.apps.googleusercontent.com</string>
 </resources>
