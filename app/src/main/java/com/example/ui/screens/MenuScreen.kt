@@ -40,6 +40,7 @@ fun MenuScreen(
     onFloatingPlayerClick: () -> Unit,
     onForceLowQualityToggle: (Boolean) -> Unit,
     onAdminPanelClick: () -> Unit,
+    onGoogleSignInClick: (() -> Unit)? = null,
     onSignOutClick: (() -> Unit)? = null
 ) {
     Column(
@@ -157,9 +158,25 @@ fun MenuScreen(
             MenuItemCard(
                 icon = Icons.Default.AdminPanelSettings,
                 title = "Admin Control Panel",
-                subtitle = "ESPN/CREX sync, football leagues & stream manager",
+                subtitle = "Real-time cloud sync, M3U8 scanner & match controller",
                 onClick = onAdminPanelClick
             )
+
+            if (userEmail != null) {
+                MenuItemCard(
+                    icon = Icons.Default.CloudDone,
+                    title = "Real-Time Cloud Connected",
+                    subtitle = "Signed in as $userEmail • Tap to sign out",
+                    onClick = { onSignOutClick?.invoke() }
+                )
+            } else if (onGoogleSignInClick != null) {
+                MenuItemCard(
+                    icon = Icons.Default.CloudSync,
+                    title = "Connect Google Cloud Sync",
+                    subtitle = "Receive instant Admin stream updates & sync favourites",
+                    onClick = onGoogleSignInClick
+                )
+            }
 
             // Force Low Quality Toggle Card
             Card(

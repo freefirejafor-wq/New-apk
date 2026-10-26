@@ -10,12 +10,14 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import com.example.data.model.StreamSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +56,14 @@ class ExoPlayerManager(private val context: Context) {
 
     private var positionUpdateJob: kotlinx.coroutines.Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    private var fallbackCandidates: List<StreamSource> = emptyList()
+    private var failedStreamUrls = mutableSetOf<String>()
+    private var currentForceLowQuality: Boolean = false
+
+    fun setFallbackCandidates(candidates: List<StreamSource>, forceLowQuality: Boolean = false) {
+        fallbackCandidates = candidates.filter { it.isEnabled && it.url.isNotBlank() }
+        currentForceLowQuality = forceLowQuality
+    }
 
     fun getPlayer(): ExoPlayer {
         if (exoPlayer == null) {
@@ -114,11 +124,30 @@ class ExoPlayerManager(private val context: Context) {
                         }
 
                         override fun onPlayerError(error: PlaybackException) {
+                            if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                                exoPlayer?.let { p ->
+                                    p.seekToDefaultPosition()
+                                    p.prepare()
+                                    p.playWhenReady = true
+                                }
+                                return
+                            }
                             _isBuffering.value = false
                             _isPlaying.value = false
                             stopPositionTracking()
-                            val cause = error.message ?: "Unknown playback error"
-                            _errorMessage.value = "Playback failed: $cause. Please switch stream server."
+                            val failedUrl = _currentStream.value?.url
+                            if (!failedUrl.isNullOrBlank()) {
+                                failedStreamUrls.add(failedUrl)
+                            }
+                            val nextStream = fallbackCandidates.firstOrNull { candidate ->
+                                candidate.url.isNotBlank() && candidate.url !in failedStreamUrls
+                            }
+                            if (nextStream != null) {
+                                playStreamInternal(nextStream, currentForceLowQuality, resetFailedSet = false)
+                            } else {
+                                val cause = error.message ?: "Unknown playback error"
+                                _errorMessage.value = "Playback failed: $cause. Please switch stream server."
+                            }
                         }
                     })
                 }
@@ -161,11 +190,23 @@ class ExoPlayerManager(private val context: Context) {
     }
 
     fun playStream(stream: StreamSource, forceLowQuality: Boolean = false) {
+        playStreamInternal(stream, forceLowQuality, resetFailedSet = true)
+    }
+
+    private fun playStreamInternal(
+        stream: StreamSource,
+        forceLowQuality: Boolean,
+        resetFailedSet: Boolean
+    ) {
         if (stream.url.isBlank()) {
             _isBuffering.value = false
             _errorMessage.value = "Stream URL is empty. Please select another server."
             return
         }
+        if (resetFailedSet) {
+            failedStreamUrls.clear()
+        }
+        currentForceLowQuality = forceLowQuality
         try {
             val player = getPlayer()
             _currentStream.value = stream
@@ -198,16 +239,27 @@ class ExoPlayerManager(private val context: Context) {
 
     private fun createMediaSource(stream: StreamSource, forceLowQuality: Boolean): MediaSource {
         val uri = Uri.parse(stream.url.trim())
-        val userAgent = stream.userAgent ?: "FootballLiveTV/7.3 (Linux; Android)"
+        val userAgent = stream.userAgent?.takeIf { it.isNotBlank() }
+            ?: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
-            .setConnectTimeoutMs(8_000)
-            .setReadTimeoutMs(8_000)
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(10_000)
             .setAllowCrossProtocolRedirects(true)
 
-        stream.referer?.let { referer ->
+        stream.referer?.takeIf { it.isNotBlank() }?.let { referer ->
             httpDataSourceFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+        }
+
+        // Prevent DefaultHttpDataSource.skipFully(DefaultHttpDataSource.java:744) EOFException
+        // when live IPTV servers return HTTP 200 OK instead of 206 Partial Content on chunk retries
+        val liveSafeDataSourceFactory = ResolvingDataSource.Factory(httpDataSourceFactory) { dataSpec ->
+            if (dataSpec.position > 0L && dataSpec.length == C.LENGTH_UNSET.toLong()) {
+                dataSpec.buildUpon().setPosition(0L).build()
+            } else {
+                dataSpec
+            }
         }
 
         val isHls = stream.url.contains(".m3u8", ignoreCase = true) ||
@@ -217,14 +269,21 @@ class ExoPlayerManager(private val context: Context) {
             val mediaItem = MediaItem.Builder()
                 .setUri(uri)
                 .setMimeType(MimeTypes.APPLICATION_M3U8)
+                .setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder()
+                        .setMaxPlaybackSpeed(1.02f)
+                        .build()
+                )
                 .build()
 
-            HlsMediaSource.Factory(httpDataSourceFactory)
+            HlsMediaSource.Factory(liveSafeDataSourceFactory)
                 .setAllowChunklessPreparation(true)
+                .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(0))
                 .createMediaSource(mediaItem)
         } else {
             val mediaItem = MediaItem.fromUri(uri)
-            ProgressiveMediaSource.Factory(httpDataSourceFactory)
+            ProgressiveMediaSource.Factory(liveSafeDataSourceFactory)
+                .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(1))
                 .createMediaSource(mediaItem)
         }
     }

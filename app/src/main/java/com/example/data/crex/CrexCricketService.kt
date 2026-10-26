@@ -240,6 +240,9 @@ class CrexCricketService(
     private val routeErrors = ConcurrentHashMap<String, RouteErrorState>()
 
     @Volatile
+    private var latestServerEpochMs: Long = 0L
+
+    @Volatile
     private var lastDiagnostics = ProviderSyncDiagnostics(
         providerName = "CREX (International Cricket)",
         enabled = true,
@@ -253,6 +256,14 @@ class CrexCricketService(
     fun clearCache() {
         routeCache.clear()
         routeErrors.clear()
+    }
+
+    private fun resolveEffectiveNowMs(referenceNowEpochMs: Long): Long {
+        return when {
+            referenceNowEpochMs > 0L -> referenceNowEpochMs
+            latestServerEpochMs > 0L -> latestServerEpochMs
+            else -> System.currentTimeMillis()
+        }
     }
 
     /**
@@ -305,7 +316,19 @@ class CrexCricketService(
                 }
                 else -> original
             }
-            chain.proceed(upstreamRequest)
+            val response = chain.proceed(upstreamRequest)
+            val dateHeader = response.header("Date")?.trim().orEmpty()
+            if (dateHeader.isNotBlank()) {
+                runCatching {
+                    val sdf = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US).apply {
+                        timeZone = TimeZone.getTimeZone("UTC")
+                    }
+                    sdf.parse(dateHeader)?.time ?: 0L
+                }.getOrNull()?.takeIf { it > 0L }?.let { serverMs ->
+                    latestServerEpochMs = serverMs
+                }
+            }
+            response
         } else {
             chain.proceed(original)
         }
@@ -320,30 +343,129 @@ class CrexCricketService(
 
     private val defaultCricketStreams = listOf(
         StreamSource(
-            name = "T SPORTS FHD (BD)",
-            quality = "FHD",
-            url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
+            name = "T Sports HD (BD)",
+            quality = "1080p",
+            url = "https://live-us1.thaimomo.com/live-as/chtsport-1/playlist.m3u8",
             isDefault = true,
             isEnabled = true,
             priorityOrder = 1,
             isBackup = false
         ),
         StreamSource(
-            name = "STAR SPORTS 1 HD",
-            quality = "FHD",
-            url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+            name = "T Sports RobiTV (BD)",
+            quality = "1080p",
+            url = "https://robitv.com/rn/http://45.117.61.162/01_Tsports_HD/tracks-v1a1/mono.m3u8",
             isDefault = false,
             isEnabled = true,
             priorityOrder = 2,
             isBackup = false
         ),
         StreamSource(
-            name = "WILLOW / PTV SPORTS HD (Backup)",
-            quality = "HD",
-            url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8",
+            name = "Willow TV HD",
+            quality = "1080p",
+            url = "https://tvsen5.aynaott.com/willowhd/index.m3u8",
             isDefault = false,
             isEnabled = true,
             priorityOrder = 3,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "A Sports HD",
+            quality = "1080p",
+            url = "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 4,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "A Sports Track 2",
+            quality = "1080p",
+            url = "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/tracks-v1a1/mono.ts.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 5,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "PTV Sports HD",
+            quality = "1080p",
+            url = "https://flussonic.defineatoz.com/PTV/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 6,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Star Sports 2 HD",
+            quality = "1080p",
+            url = "https://tvsen7.aynaott.com/ssport2hd/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 7,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Sony Sports 1 HD",
+            quality = "720p",
+            url = "https://drk6xq0vhn.gpcdn.net/live/ten_1_hd_720/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 8,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Sony Sports 2 HD",
+            quality = "720p",
+            url = "https://drk6xq0vhn.gpcdn.net/live/ten_2_hd_720/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 9,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Sony Sports 5 HD",
+            quality = "720p",
+            url = "https://drk6xq0vhn.gpcdn.net/live/ten_5_hd_720/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 10,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Cricket Gold HD",
+            quality = "1080p",
+            url = "https://tvsen6.aynaott.com/M2W2UR49dmeKbZnmdRzN/index.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 11,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Willow / Cricket Gold FHD",
+            quality = "1080p",
+            url = "https://streams2.sofast.tv/ptnr-yupptv/title-cricketgold/v1/master/611d79b11b77e2f571934fd80ca1413453772ac7/b2048bb8-1686-4432-aa50-647245383e0c/manifest.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 12,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "DD Sports HD",
+            quality = "1080p",
+            url = "https://cdn.pishow.tv/ott/live/1161/master.m3u8",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 13,
+            isBackup = false
+        ),
+        StreamSource(
+            name = "Sony Sports Ten 1 (Backup)",
+            quality = "HD",
+            url = "http://103.151.60.162:2122/play/a01c/index.m3u8?hls",
+            isDefault = false,
+            isEnabled = true,
+            priorityOrder = 14,
             isBackup = true
         )
     )
@@ -441,7 +563,7 @@ class CrexCricketService(
      */
     suspend fun fetchSynchronizedDashboard(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexDashboardState = withContext(Dispatchers.IO) {
         val liveDeferred = async { fetchLiveMatchesRaw(forceRefresh, referenceNowEpochMs) }
         val upcomingDeferred = async { fetchUpcomingMatchesRaw(forceRefresh, referenceNowEpochMs) }
@@ -533,7 +655,7 @@ class CrexCricketService(
      */
     suspend fun fetchLiveMatches(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         val raw = fetchLiveMatchesRaw(forceRefresh, referenceNowEpochMs)
         return raw.copy(matches = raw.matches.filter { it.status == MatchStatus.LIVE })
@@ -541,17 +663,18 @@ class CrexCricketService(
 
     private suspend fun fetchLiveMatchesRaw(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         val result = executeBackendRoute(
             routePath = ROUTE_LIVE,
             ttlMs = LIVE_CACHE_TTL_MS,
             forceRefresh = forceRefresh
         )
+        val effectiveNowMs = resolveEffectiveNowMs(referenceNowEpochMs)
         return result.fold(
             onSuccess = { entry ->
                 try {
-                    val parsed = parseLiveMatchesPayload(entry.rawBody, referenceNowEpochMs)
+                    val parsed = parseLiveMatchesPayload(entry.rawBody, effectiveNowMs)
                     CrexCategoryFeedState(
                         category = MatchStatus.LIVE,
                         matches = parsed,
@@ -566,7 +689,7 @@ class CrexCricketService(
                         category = MatchStatus.LIVE,
                         routePath = ROUTE_LIVE,
                         error = e,
-                        parser = { parseLiveMatchesPayload(it, referenceNowEpochMs) }
+                        parser = { parseLiveMatchesPayload(it, effectiveNowMs) }
                     )
                 }
             },
@@ -575,7 +698,7 @@ class CrexCricketService(
                     category = MatchStatus.LIVE,
                     routePath = ROUTE_LIVE,
                     error = error,
-                    parser = { parseLiveMatchesPayload(it, referenceNowEpochMs) }
+                    parser = { parseLiveMatchesPayload(it, effectiveNowMs) }
                 )
             }
         )
@@ -586,24 +709,25 @@ class CrexCricketService(
      */
     suspend fun fetchUpcomingMatches(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         return fetchUpcomingMatchesRaw(forceRefresh, referenceNowEpochMs)
     }
 
     private suspend fun fetchUpcomingMatchesRaw(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         val result = executeBackendRoute(
             routePath = ROUTE_UPCOMING,
             ttlMs = UPCOMING_CACHE_TTL_MS,
             forceRefresh = forceRefresh
         )
+        val effectiveNowMs = resolveEffectiveNowMs(referenceNowEpochMs)
         return result.fold(
             onSuccess = { entry ->
                 try {
-                    val parsed = parseUpcomingMatchesPayload(entry.rawBody, referenceNowEpochMs)
+                    val parsed = parseUpcomingMatchesPayload(entry.rawBody, effectiveNowMs)
                     CrexCategoryFeedState(
                         category = MatchStatus.UPCOMING,
                         matches = parsed,
@@ -618,7 +742,7 @@ class CrexCricketService(
                         category = MatchStatus.UPCOMING,
                         routePath = ROUTE_UPCOMING,
                         error = e,
-                        parser = { parseUpcomingMatchesPayload(it, referenceNowEpochMs) }
+                        parser = { parseUpcomingMatchesPayload(it, effectiveNowMs) }
                     )
                 }
             },
@@ -627,7 +751,7 @@ class CrexCricketService(
                     category = MatchStatus.UPCOMING,
                     routePath = ROUTE_UPCOMING,
                     error = error,
-                    parser = { parseUpcomingMatchesPayload(it, referenceNowEpochMs) }
+                    parser = { parseUpcomingMatchesPayload(it, effectiveNowMs) }
                 )
             }
         )
@@ -638,24 +762,25 @@ class CrexCricketService(
      */
     suspend fun fetchFinishedMatches(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         return fetchFinishedMatchesRaw(forceRefresh, referenceNowEpochMs)
     }
 
     private suspend fun fetchFinishedMatchesRaw(
         forceRefresh: Boolean = false,
-        referenceNowEpochMs: Long = System.currentTimeMillis()
+        referenceNowEpochMs: Long = 0L
     ): CrexCategoryFeedState {
         val result = executeBackendRoute(
             routePath = ROUTE_FINISHED,
             ttlMs = FINISHED_CACHE_TTL_MS,
             forceRefresh = forceRefresh
         )
+        val effectiveNowMs = resolveEffectiveNowMs(referenceNowEpochMs)
         return result.fold(
             onSuccess = { entry ->
                 try {
-                    val parsed = parseFinishedMatchesPayload(entry.rawBody, referenceNowEpochMs)
+                    val parsed = parseFinishedMatchesPayload(entry.rawBody, effectiveNowMs)
                     CrexCategoryFeedState(
                         category = MatchStatus.FINISHED,
                         matches = parsed,
@@ -670,7 +795,7 @@ class CrexCricketService(
                         category = MatchStatus.FINISHED,
                         routePath = ROUTE_FINISHED,
                         error = e,
-                        parser = { parseFinishedMatchesPayload(it, referenceNowEpochMs) }
+                        parser = { parseFinishedMatchesPayload(it, effectiveNowMs) }
                     )
                 }
             },
@@ -679,7 +804,7 @@ class CrexCricketService(
                     category = MatchStatus.FINISHED,
                     routePath = ROUTE_FINISHED,
                     error = error,
-                    parser = { parseFinishedMatchesPayload(it, referenceNowEpochMs) }
+                    parser = { parseFinishedMatchesPayload(it, effectiveNowMs) }
                 )
             }
         )
@@ -842,8 +967,7 @@ class CrexCricketService(
 
         val tournamentHeader = buildList {
             if (board.isNotBlank()) add(board)
-            if (format.isNotBlank()) add(format)
-            if (seriesKey.isNotBlank()) add("Series $seriesKey")
+            if (format.isNotBlank()) add("$format Series")
         }.joinToString(" • ").ifBlank { "International Cricket" }
 
         // Strict Senior International Cricket filter
@@ -912,8 +1036,8 @@ class CrexCricketService(
             return null
         }
 
-        val v1 = TeamFlagResolver.resolveForMatch(t1ResolvedName, t1Key, isNationalTeam = true)
-        val v2 = TeamFlagResolver.resolveForMatch(t2ResolvedName, t2Key, isNationalTeam = true)
+        val v1 = TeamFlagResolver.resolveForMatch(t1ResolvedName, "", isNationalTeam = true)
+        val v2 = TeamFlagResolver.resolveForMatch(t2ResolvedName, "", isNationalTeam = true)
 
         // Score-free status summary for MatchCard (no innings scores or score badges on MatchCard)
         val cardStatusSummary = when (resolvedStatus) {
@@ -931,15 +1055,7 @@ class CrexCricketService(
         }
 
         val dhakaStart = formatEpochDhaka(if (startEpochMs > 0L) startEpochMs else effectiveDateEpochMs)
-        val matchTimeText = buildString {
-            if (dhakaStart.isNotBlank()) {
-                append(dhakaStart)
-            }
-            if (venueKey.isNotBlank()) {
-                if (isNotEmpty()) append(" • ")
-                append("Venue #$venueKey")
-            }
-        }.ifBlank { "Asia/Dhaka Time" }
+        val matchTimeText = dhakaStart.ifBlank { "Asia/Dhaka Time (BST)" }
 
         val sortRank = when (resolvedStatus) {
             MatchStatus.LIVE -> 0
@@ -1027,8 +1143,7 @@ class CrexCricketService(
         val seriesMeta = seriesMetaCache[seriesKey]
         val tournamentHeader = buildList {
             if (!seriesMeta.isNullOrBlank()) add(seriesMeta)
-            else if (formatLabel.isNotBlank()) add(formatLabel)
-            if (seriesKey.isNotBlank()) add("Series $seriesKey")
+            else if (formatLabel.isNotBlank()) add("$formatLabel Series")
             if (matchNumber.isNotBlank() && matchNumber != "0") add("Match #$matchNumber")
         }.joinToString(" • ").ifBlank { "International Cricket" }
 
@@ -1048,8 +1163,8 @@ class CrexCricketService(
             return null
         }
 
-        val v1 = TeamFlagResolver.resolveForMatch(t1Name, t1Key, isNationalTeam = true)
-        val v2 = TeamFlagResolver.resolveForMatch(t2Name, t2Key, isNationalTeam = true)
+        val v1 = TeamFlagResolver.resolveForMatch(t1Name, "", isNationalTeam = true)
+        val v2 = TeamFlagResolver.resolveForMatch(t2Name, "", isNationalTeam = true)
 
         val dhakaTime = if (startEpochMs > 0L) {
             formatEpochDhaka(startEpochMs)
@@ -1057,13 +1172,7 @@ class CrexCricketService(
             formatSourceDateStringDhaka(rawDate)
         }
 
-        val matchTimeText = buildString {
-            append(dhakaTime.ifBlank { rawDate })
-            if (venueKey.isNotBlank()) {
-                if (isNotEmpty()) append(" • ")
-                append("Venue #$venueKey")
-            }
-        }
+        val matchTimeText = dhakaTime.ifBlank { rawDate }
 
         val resolvedStatus = if (resultNote.contains(" won ", ignoreCase = true) ||
             resultNote.contains("abandoned", ignoreCase = true)
@@ -1173,8 +1282,7 @@ class CrexCricketService(
         val seriesMeta = seriesMetaCache[seriesKey]
         val tournamentHeader = buildList {
             if (!seriesMeta.isNullOrBlank()) add(seriesMeta)
-            else if (formatLabel.isNotBlank()) add(formatLabel)
-            if (seriesKey.isNotBlank()) add("Series $seriesKey")
+            else if (formatLabel.isNotBlank()) add("$formatLabel Series")
             if (matchNumber.isNotBlank() && matchNumber != "0") add("Match #$matchNumber")
         }.joinToString(" • ").ifBlank { "International Cricket" }
 
@@ -1194,8 +1302,8 @@ class CrexCricketService(
             return null
         }
 
-        val v1 = TeamFlagResolver.resolveForMatch(t1Name, t1Key, isNationalTeam = true)
-        val v2 = TeamFlagResolver.resolveForMatch(t2Name, t2Key, isNationalTeam = true)
+        val v1 = TeamFlagResolver.resolveForMatch(t1Name, "", isNationalTeam = true)
+        val v2 = TeamFlagResolver.resolveForMatch(t2Name, "", isNationalTeam = true)
 
         // Score-free status summary for MatchCard (never show innings scores on MatchCard)
         val statusSummary = buildList {
@@ -1204,13 +1312,7 @@ class CrexCricketService(
         }.joinToString(" • ")
 
         val dhakaDate = formatSourceDateStringDhaka(dateStr)
-        val matchTimeText = buildString {
-            if (dhakaDate.isNotBlank()) append(dhakaDate)
-            if (venueKey.isNotBlank()) {
-                if (isNotEmpty()) append(" • ")
-                append("Venue #$venueKey")
-            }
-        }.ifBlank { "Finished" }
+        val matchTimeText = dhakaDate.ifBlank { "Finished" }
 
         return LiveMatch(
             id = matchKey,

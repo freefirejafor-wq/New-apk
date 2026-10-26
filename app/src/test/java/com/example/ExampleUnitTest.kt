@@ -300,5 +300,119 @@ class ExampleUnitTest {
         val clubFallback = TeamFlagResolver.resolveForMatch("England FC", "ENG", existingFlag = "", isNationalTeam = false)
         assertEquals("", clubFallback.flagUrl)
         assertEquals("", clubFallback.emoji)
+
+        // Default football streams must be attached so tapping any Football match opens the stream chooser
+        assertTrue(match.streams.isNotEmpty())
+
+        // Candidate dates must be single 8-digit YYYYMMDD strings without hyphens (prevents ESPN HTTP 400)
+        val candidateDates = EspnFootballService.buildCandidateSingleDatesDhaka(refNowMs)
+        assertTrue(candidateDates.all { it.length == 8 && !it.contains("-") })
+    }
+
+    @Test
+    fun livePlaylistMatcher_parsesM3uAndAutoResolvesMatchBroadcastStreamsAndSchedule() {
+        val matcher = com.example.data.playlist.LivePlaylistMatcherService()
+        val sampleM3u = """
+            #EXTM3U
+            #EXTINF:-1 tvg-id="TSports.bd" tvg-logo="https://i.imgur.com/16e533j.png" group-title="Sports",T Sports (720p)
+            https://live-cdn.tsports.com/live-01/index.m3u8
+            #EXTINF:-1 tvg-id="CBSGolazoNetwork.us" group-title="Sports",CBS Sports Golazo Network (1080p)
+            https://dai.google.com/linear/hls/event/master.m3u8
+            #EXTINF:-1 tvg-id="WillowSports.us" group-title="Sports",Willow Sports (1080p)
+            https://amg01269-amg01269c1-Sportstribal-emea-5204.playouts.now.amagi.tv/ts-eu-w1-n2/playlist/master.m3u8
+        """.trimIndent()
+
+        val parsedChannels = matcher.parseSportsM3uContent(sampleM3u)
+        assertTrue(parsedChannels.size >= 3)
+
+        val espnService = EspnFootballService()
+        val sampleUclJson = """
+            {
+              "leagues": [{"name": "UEFA Champions League"}],
+              "events": [
+                {
+                  "id": "401699001",
+                  "date": "2026-10-21T19:00Z",
+                  "name": "Real Madrid at Arsenal",
+                  "competitions": [
+                    {
+                      "broadcasts": [
+                        {"market": "US", "names": ["CBS Sports Golazo", "Paramount+"]}
+                      ],
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "team": {"displayName": "Arsenal", "abbreviation": "ARS"}
+                        },
+                        {
+                          "homeAway": "away",
+                          "team": {"displayName": "Real Madrid", "abbreviation": "RMA"}
+                        }
+                      ],
+                      "status": {"type": {"state": "pre"}}
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val uclMatch = espnService.parseScoreboardJson("uefa.champions", sampleUclJson, referenceNowEpochMs = refNowMs).first()
+        val enrichedMatch = matcher.enrichMatchWithAutoPlaylistStreams(uclMatch)
+
+        // Should include broadcast channel badges and resolved live streams with schedule time slot info
+        assertTrue(enrichedMatch.broadcastChannels.isNotEmpty())
+        assertTrue(enrichedMatch.streams.isNotEmpty())
+        assertTrue(enrichedMatch.streams.any { it.url.contains(".m3u8") })
+        assertTrue(enrichedMatch.streams.any { it.name.contains("CBS", ignoreCase = true) || it.name.contains("Real Madrid", ignoreCase = true) || it.name.contains("Sony", ignoreCase = true) })
+    }
+
+    @Test
+    fun footballLeagueDisplayNames_andUserM3u8AutoMapping_workCorrectly() {
+        val espnService = EspnFootballService()
+        val matcher = com.example.data.playlist.LivePlaylistMatcherService()
+        val sampleJson = """
+            {
+              "events": [
+                {
+                  "id": "401699100",
+                  "date": "2026-10-21T19:00Z",
+                  "name": "River Plate at Boca Juniors",
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {"homeAway": "home", "team": {"displayName": "Boca Juniors", "abbreviation": "BOC"}},
+                        {"homeAway": "away", "team": {"displayName": "River Plate", "abbreviation": "RIV"}}
+                      ],
+                      "status": {"type": {"state": "in", "completed": false, "shortDetail": "45'"}}
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val argMatch = espnService.parseScoreboardJson("arg.1", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | LIGA PROFESIONAL DE FÚTBOL", argMatch.tournament)
+        val enrichedArg = matcher.enrichMatchWithAutoPlaylistStreams(argMatch)
+        assertTrue(enrichedArg.streams.any { it.url.contains("tycsport.m3u8") })
+
+        val mexMatch = espnService.parseScoreboardJson("mex.1", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | LIGA MX, APERTURA", mexMatch.tournament)
+        val enrichedMex = matcher.enrichMatchWithAutoPlaylistStreams(mexMatch)
+        assertTrue(enrichedMex.streams.any { it.url.contains("master_2.m3u8") })
+
+        val esp1Match = espnService.parseScoreboardJson("esp.1", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | LALIGA", esp1Match.tournament)
+
+        val esp2Match = espnService.parseScoreboardJson("esp.2", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | LALIGA 2", esp2Match.tournament)
+
+        val porMatch = espnService.parseScoreboardJson("por.1", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | LIGA PORTUGAL BETCLIC", porMatch.tournament)
+
+        val nedMatch = espnService.parseScoreboardJson("ned.1", sampleJson, referenceNowEpochMs = refNowMs).first()
+        assertEquals("FOOTBALL | VRIENDENLOTERIJ EREDIVISIE", nedMatch.tournament)
     }
 }
+

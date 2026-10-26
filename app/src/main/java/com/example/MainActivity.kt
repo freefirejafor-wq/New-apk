@@ -40,7 +40,9 @@ import com.example.data.model.*
 import com.example.data.repository.SportsStreamRepository
 import com.example.player.ExoPlayerManager
 import com.example.ui.auth.AuthGateScreen
+import com.example.ui.auth.attemptAutoSignIn
 import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.onGoogleSignInClicked
 import com.example.ui.auth.signOut
 import com.example.ui.components.*
 import com.example.ui.dialogs.*
@@ -129,6 +131,18 @@ fun FootballLiveTvApp(
     val initialUser = remember { runCatching { Firebase.auth.currentUser }.getOrNull() }
     val currentUser by authFlow.collectAsState(initial = initialUser)
 
+    LaunchedEffect(Unit) {
+        if (currentUser == null) {
+            attemptAutoSignIn(
+                context = context,
+                credentialManager = credentialManager,
+                onAuthSuccess = {},
+                onUnauthenticated = {},
+                scope = coroutineScope
+            )
+        }
+    }
+
     LaunchedEffect(currentUser?.uid) {
         val uid = currentUser?.uid
         if (uid != null) {
@@ -191,6 +205,7 @@ fun FootballLiveTvApp(
         activeMatch = match
         activeChannelTitle = title
         activeStreams = enabledStreams
+        playerManager.setFallbackCandidates(enabledStreams, config.forceLowQuality)
         if (match != null) {
             coroutineScope.launch {
                 repository.loadMatchDetailOnDemand(match.id, force = false)
@@ -203,9 +218,34 @@ fun FootballLiveTvApp(
         currentScreen = AppScreen.PLAYER
     }
 
-    // 1. Auto-refresh Live list using admin-configured interval ONLY while the app is visible (STARTED/RESUMED).
-    // Automatically stops polling when the app goes to background or is closed.
-    LaunchedEffect(lifecycleOwner, config.autoRefreshIntervalSec, config.footballSyncEnabled, config.cricketSyncEnabled) {
+    // Auto-sync activeMatch, activeStreams, and streamPickerMatch when live playlists & match broadcasts refresh
+    LaunchedEffect(matches) {
+        activeMatch?.let { currentActive ->
+            matches.find { it.id == currentActive.id }?.let { updated ->
+                activeMatch = updated
+                val updatedStreams = updated.publicEnabledStreams()
+                if (updatedStreams.isNotEmpty()) {
+                    activeStreams = updatedStreams
+                    playerManager.setFallbackCandidates(updatedStreams, config.forceLowQuality)
+                }
+            }
+        }
+        streamPickerMatch?.let { currentModalMatch ->
+            matches.find { it.id == currentModalMatch.id }?.let { updated ->
+                streamPickerMatch = updated
+            }
+        }
+    }
+
+    // 1. Auto-refresh Football (ESPN) & Cricket (CREX Live/Upcoming/Finished) + Auto-Playlist Matcher
+    // ONLY while the app is visible (STARTED/RESUMED). Automatically stops polling when backgrounded.
+    LaunchedEffect(
+        lifecycleOwner,
+        config.autoRefreshIntervalSec,
+        config.footballSyncEnabled,
+        config.cricketSyncEnabled,
+        config.enabledFootballLeagues
+    ) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 repository.refreshLiveMatches(force = false)
@@ -215,19 +255,9 @@ fun FootballLiveTvApp(
         }
     }
 
-    // 2. Refresh Upcoming every 15 minutes while the app is visible.
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) {
-                repository.refreshUpcomingMatches(force = false)
-                delay(15 * 60_000L)
-            }
-        }
-    }
-
-    // 3. Refresh Finished when opened (or when All/Scores modal is opened) and then no more often than every 30 minutes.
+    // 2. Refresh when status filter or scores dialog is explicitly toggled
     LaunchedEffect(selectedStatus, showScoresDialog) {
-        if (selectedStatus == MatchStatus.FINISHED || selectedStatus == null || showScoresDialog) {
+        if (selectedStatus == MatchStatus.FINISHED || showScoresDialog) {
             repository.refreshFinishedMatches(force = false)
         }
     }
@@ -277,14 +307,13 @@ fun FootballLiveTvApp(
         AppScreen.MAIN_TABS -> {
             Scaffold(
                 topBar = {
-                    if (selectedTab != NavTab.LIVE_EVENTS) {
-                        Column {
-                            TopSportsBar(
-                                title = config.appTitle,
+                    Column {
+                        TopSportsBar(
+                            title = config.appTitle,
                             onTelegramClick = { showTelegramDialog = true },
                             onRefreshClick = {
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Refreshing 2026 live & upcoming matches...")
+                                    snackbarHostState.showSnackbar("Refreshing live & upcoming matches and active streams...")
                                     val res = repository.syncFromRemoteFeed()
                                     res.fold(
                                         onSuccess = { count ->
@@ -306,8 +335,8 @@ fun FootballLiveTvApp(
                             }
                         )
 
-                        // Announcement Banner
-                        if (showAnnouncementBanner && config.announcement.isNotBlank()) {
+                        // Announcement Banner (kept on non-LIVE_EVENTS tabs so LIVE_EVENTS header matches screenshot)
+                        if (selectedTab != NavTab.LIVE_EVENTS && showAnnouncementBanner && config.announcement.isNotBlank()) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -331,12 +360,11 @@ fun FootballLiveTvApp(
                                     maxLines = 1,
                                     modifier = Modifier.weight(1f)
                                 )
-                                    IconButton(
-                                        onClick = { showAnnouncementBanner = false },
-                                        modifier = Modifier.size(20.dp)
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
-                                    }
+                                IconButton(
+                                    onClick = { showAnnouncementBanner = false },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
                                 }
                             }
                         }
@@ -494,7 +522,8 @@ fun FootballLiveTvApp(
                                 onStreamSelectClick = { match ->
                                     openMatchModal(match)
                                 },
-                                searchQuery = searchQuery
+                                searchQuery = searchQuery,
+                                onSearchQueryChange = { searchQuery = it }
                             )
                         }
 
@@ -605,6 +634,23 @@ fun FootballLiveTvApp(
                                     }
                                 },
                                 onAdminPanelClick = { showAdminPinDialog = true },
+                                onGoogleSignInClick = {
+                                    onGoogleSignInClicked(
+                                        context = context,
+                                        credentialManager = credentialManager,
+                                        onAuthSuccess = {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Connected to Real-Time Cloud Sync!")
+                                            }
+                                        },
+                                        onAuthError = { msg ->
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Cloud Sign-In: $msg")
+                                            }
+                                        },
+                                        scope = coroutineScope
+                                    )
+                                },
                                 onSignOutClick = {
                                     repository.stopCloudSync()
                                     signOut(

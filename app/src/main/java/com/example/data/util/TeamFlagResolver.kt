@@ -369,8 +369,8 @@ object TeamFlagResolver {
             }?.value
 
         val resolvedCode = when {
-            teamCode.isNotBlank() -> teamCode.trim()
             matched != null -> matched.code
+            teamCode.isNotBlank() && teamCode.none { it.isDigit() } -> teamCode.trim().uppercase(Locale.US)
             else -> teamName.trim().take(3).uppercase(Locale.US).ifBlank { "INT" }
         }
 

@@ -13,6 +13,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,8 +56,11 @@ fun LiveEventsScreen(
     onMatchClick: (LiveMatch) -> Unit,
     onFavoriteToggle: (String) -> Unit,
     onStreamSelectClick: (LiveMatch) -> Unit,
-    searchQuery: String = ""
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {}
 ) {
+    var showSearchBar by remember { mutableStateOf(false) }
+
     val totalCount = matches.size
     val cricketCount = remember(matches) { matches.count { it.sport == SportType.CRICKET } }
     val footballCount = remember(matches) { matches.count { it.sport == SportType.FOOTBALL } }
@@ -114,14 +120,13 @@ fun LiveEventsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0B111E))
-            .statusBarsPadding()
     ) {
-        // 1. Top Sport Selector Row (All, Cricket, Football, Boxing, Motorsport) matching screenshot
+        // 1. Top Sport Selector Row (All, Cricket, Football, Boxing, Motorsport) right below TopSportsBar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -156,27 +161,31 @@ fun LiveEventsScreen(
                 }
             )
 
-            SportIconTopCard(
-                sportType = SportType.BOXING,
-                badgeCount = boxingCount,
-                isSelected = selectedSport == SportType.BOXING,
-                showTextLabel = false,
-                label = "Boxing",
-                onClick = {
-                    onSportSelect(if (selectedSport == SportType.BOXING) SportType.ALL else SportType.BOXING)
-                }
-            )
+            if (boxingCount > 0) {
+                SportIconTopCard(
+                    sportType = SportType.BOXING,
+                    badgeCount = boxingCount,
+                    isSelected = selectedSport == SportType.BOXING,
+                    showTextLabel = false,
+                    label = "Boxing",
+                    onClick = {
+                        onSportSelect(if (selectedSport == SportType.BOXING) SportType.ALL else SportType.BOXING)
+                    }
+                )
+            }
 
-            SportIconTopCard(
-                sportType = SportType.RACING,
-                badgeCount = racingCount,
-                isSelected = selectedSport == SportType.RACING,
-                showTextLabel = false,
-                label = "Motorsport",
-                onClick = {
-                    onSportSelect(if (selectedSport == SportType.RACING) SportType.ALL else SportType.RACING)
-                }
-            )
+            if (racingCount > 0) {
+                SportIconTopCard(
+                    sportType = SportType.RACING,
+                    badgeCount = racingCount,
+                    isSelected = selectedSport == SportType.RACING,
+                    showTextLabel = false,
+                    label = "Motorsport",
+                    onClick = {
+                        onSportSelect(if (selectedSport == SportType.RACING) SportType.ALL else SportType.RACING)
+                    }
+                )
+            }
         }
 
         // 2. Status Filter Pills Row: All, Live, Upcoming, Finished (no extra date tabs)
@@ -312,7 +321,7 @@ fun LiveEventsScreen(
 }
 
 @Composable
-private fun SportIconTopCard(
+internal fun SportIconTopCard(
     sportType: SportType,
     badgeCount: Int,
     isSelected: Boolean,
@@ -394,7 +403,7 @@ private fun SportIconTopCard(
 }
 
 @Composable
-private fun StatusFilterPill(
+internal fun StatusFilterPill(
     label: String,
     isSelected: Boolean,
     onClick: () -> Unit,

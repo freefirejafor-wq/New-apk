@@ -10,6 +10,7 @@ import com.example.data.crex.CrexDashboardState
 import com.example.data.crex.CrexMatchDetailState
 import com.example.data.espn.EspnFootballService
 import com.example.data.model.*
+import com.example.data.playlist.LivePlaylistMatcherService
 import com.example.data.sofascore.SofaScoreMetadataService
 import com.example.data.util.TeamFlagResolver
 import com.google.firebase.Firebase
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +40,7 @@ class SportsStreamRepository(
     val crexService: CrexCricketService = CrexCricketService(),
     val espnService: EspnFootballService = EspnFootballService(),
     val sofascoreService: SofaScoreMetadataService = SofaScoreMetadataService(),
+    val playlistMatcherService: LivePlaylistMatcherService = LivePlaylistMatcherService(),
     val cloudSyncRepository: CloudSyncRepository? = runCatching { CloudSyncRepository(context) }.getOrNull()
 ) {
     private fun isFirebaseSignedIn(): Boolean =
@@ -134,7 +137,8 @@ class SportsStreamRepository(
         val cfg = _config.value
         _providerDiagnostics.value = listOf(
             espnService.getDiagnostics(cfg.footballSyncEnabled),
-            crexService.getDiagnostics(cfg.cricketSyncEnabled)
+            crexService.getDiagnostics(cfg.cricketSyncEnabled),
+            playlistMatcherService.getDiagnostics()
         )
     }
 
@@ -225,6 +229,10 @@ class SportsStreamRepository(
                         } else {
                             cur.enabledFootballLeagues
                         }
+                        val customM3u = obj.optString("customM3uBlock", cur.customM3uBlock)
+                        if (customM3u.isNotBlank()) {
+                            playlistMatcherService.registerAdminM3uBlock(customM3u)
+                        }
                         _config.value = cur.copy(
                             appTitle = obj.optString("appTitle", cur.appTitle).ifBlank { cur.appTitle },
                             version = obj.optString("version", cur.version).ifBlank { cur.version },
@@ -236,7 +244,8 @@ class SportsStreamRepository(
                             footballSyncEnabled = obj.optBoolean("footballSyncEnabled", cur.footballSyncEnabled),
                             cricketSyncEnabled = obj.optBoolean("cricketSyncEnabled", cur.cricketSyncEnabled),
                             autoRefreshIntervalSec = obj.optInt("autoRefreshIntervalSec", cur.autoRefreshIntervalSec).coerceIn(15, 600),
-                            enabledFootballLeagues = parsedLeagues
+                            enabledFootballLeagues = parsedLeagues,
+                            customM3uBlock = customM3u
                         )
                     } catch (_: Exception) {
                     }
@@ -357,9 +366,20 @@ class SportsStreamRepository(
                             val s = leaguesArr.optString(i).trim()
                             if (s.isNotBlank()) add(s)
                         }
+                        add("esp.1")
+                        add("esp.2")
+                        add("arg.1")
+                        add("mex.1")
+                        add("por.1")
+                        add("ned.1")
                     }
                 } else {
                     AppConfig.DEFAULT_ENABLED_FOOTBALL_LEAGUES
+                }
+
+                val savedCustomM3u = obj.optString("customM3uBlock", "")
+                if (savedCustomM3u.isNotBlank()) {
+                    playlistMatcherService.registerAdminM3uBlock(savedCustomM3u)
                 }
 
                 _config.value = AppConfig(
@@ -375,7 +395,8 @@ class SportsStreamRepository(
                     footballSyncEnabled = obj.optBoolean("footballSyncEnabled", true),
                     cricketSyncEnabled = obj.optBoolean("cricketSyncEnabled", true),
                     autoRefreshIntervalSec = obj.optInt("autoRefreshIntervalSec", 25).coerceIn(15, 600),
-                    enabledFootballLeagues = enabledLeagues
+                    enabledFootballLeagues = enabledLeagues,
+                    customM3uBlock = savedCustomM3u
                 )
             } catch (e: Exception) {
                 _config.value = AppConfig()
@@ -386,12 +407,14 @@ class SportsStreamRepository(
         footballProviderMatches.clear()
         rebuildCombinedMatches()
 
-        val savedChannelsJson = prefs.getString("saved_channels_v3", null)
+        val savedChannelsJson = prefs.getString("saved_channels_v5", null)
         if (savedChannelsJson != null) {
             try {
                 val list = deserializeChannels(savedChannelsJson)
                 if (list.isNotEmpty()) {
-                    _channels.value = list
+                    _channels.value = list.map { ch ->
+                        if (ch.id in favoriteChannelIds) ch.copy(isFavorite = true) else ch
+                    }
                 } else {
                     _channels.value = defaultChannels()
                 }
@@ -427,6 +450,7 @@ class SportsStreamRepository(
                 put("cricketSyncEnabled", cfg.cricketSyncEnabled)
                 put("autoRefreshIntervalSec", cfg.autoRefreshIntervalSec)
                 put("enabledFootballLeagues", leaguesArr)
+                put("customM3uBlock", cfg.customM3uBlock)
             }
 
             val favMetaArr = JSONArray()
@@ -453,7 +477,7 @@ class SportsStreamRepository(
                 .putStringSet("favorite_match_ids", favoriteMatchIds.toSet())
                 .putString("favorite_match_meta_v2", favMetaArr.toString())
                 .putString("local_match_overrides_v2", overridesArr.toString())
-                .putString("saved_channels_v3", channelsJson)
+                .putString("saved_channels_v5", channelsJson)
                 .putString("app_config", configObj.toString())
                 .apply()
         } catch (e: Exception) {
@@ -650,7 +674,10 @@ class SportsStreamRepository(
             emptyList()
         }
 
-        val allProviderMatches = rawFootball + rawCricket
+        // Automatically enrich every provider match with live playlist streams & broadcast channel schedule ("কোনটায় কখন খেলা")
+        val allProviderMatches = (rawFootball + rawCricket).map { m ->
+            playlistMatcherService.enrichMatchWithAutoPlaylistStreams(m)
+        }
         val enrichedMatches = reconcileAndApplyAssociations(allProviderMatches)
 
         val fbMatches = enrichedMatches.filter { it.sport == SportType.FOOTBALL }
@@ -691,10 +718,12 @@ class SportsStreamRepository(
             rebuildCombinedMatches()
             return@withContext emptyList()
         }
+        val playlistJob = async { playlistMatcherService.refreshLivePlaylists(force = force) }
         val feedResult = espnService.fetchScoreboardMatches(
             enabledLeagues = cfg.enabledFootballLeagues,
             forceRefresh = force
         )
+        playlistJob.await()
         synchronized(footballProviderMatches) {
             footballProviderMatches.clear()
             footballProviderMatches.addAll(feedResult.matches)
@@ -704,8 +733,8 @@ class SportsStreamRepository(
     }
 
     /**
-     * Refreshes all Cricket categories (Live, Upcoming, Finished) and Football matches concurrently,
-     * with cross-feed deduplication by provider `matchId`.
+     * Refreshes all Cricket categories (Live, Upcoming, Finished), Football matches (ESPN),
+     * and the auto-updating live M3U Sports Playlists concurrently.
      */
     suspend fun refreshLiveMatches(force: Boolean = false): CrexCategoryFeedState = withContext(Dispatchers.IO) {
         val cfg = _config.value
@@ -714,6 +743,16 @@ class SportsStreamRepository(
             _crexDashboardState.value = _crexDashboardState.value.copy(
                 liveState = current.copy(isLoading = true, errorMessage = null)
             )
+        }
+
+        val customM3uList = if (cfg.remoteFeedUrl.endsWith(".m3u", true) || cfg.remoteFeedUrl.endsWith(".m3u8", true)) {
+            listOf(cfg.remoteFeedUrl)
+        } else {
+            emptyList()
+        }
+
+        val playlistDeferred = async {
+            playlistMatcherService.refreshLivePlaylists(force = force, extraM3uUrls = customM3uList)
         }
 
         val fbDeferred = async {
@@ -735,6 +774,7 @@ class SportsStreamRepository(
             }
         }
 
+        playlistDeferred.await()
         val fbResult = fbDeferred.await()
         if (fbResult != null) {
             synchronized(footballProviderMatches) {
@@ -751,8 +791,34 @@ class SportsStreamRepository(
         _crexDashboardState.value = synchronizedCric.copy(
             activeDetailState = _crexDashboardState.value.activeDetailState
         )
+
+        // Merge newly discovered live M3U channels into the Channels list without removing Admin/user channels
+        syncAutoDiscoveredChannelsIntoList()
+
         rebuildCombinedMatches()
         _crexDashboardState.value.liveState
+    }
+
+    private fun syncAutoDiscoveredChannelsIntoList() {
+        val autoChannels = playlistMatcherService.buildAutoUpdatedChannels(favoriteChannelIds)
+        if (autoChannels.isEmpty()) return
+        val currentList = _channels.value.toMutableList()
+        val existingByName = currentList.associateBy { it.name.lowercase(Locale.US).trim() }
+        val existingIds = currentList.map { it.id }.toHashSet()
+
+        var changed = false
+        // Update up to 35 top live sports channels from the M3U playlist
+        for (autoCh in autoChannels.take(35)) {
+            val normName = autoCh.name.lowercase(Locale.US).trim()
+            if (autoCh.id !in existingIds && !existingByName.containsKey(normName)) {
+                currentList.add(autoCh)
+                existingIds.add(autoCh.id)
+                changed = true
+            }
+        }
+        if (changed) {
+            _channels.value = currentList
+        }
     }
 
     /**
@@ -790,8 +856,8 @@ class SportsStreamRepository(
         // If getSV3 resolved human-readable team names in speech_names, update the match cards in place
         val d = detailState.detail
         if (d != null) {
-            val v1 = TeamFlagResolver.resolveForMatch(d.team1Name, d.team1Key, isNationalTeam = true)
-            val v2 = TeamFlagResolver.resolveForMatch(d.team2Name, d.team2Key, isNationalTeam = true)
+            val v1 = TeamFlagResolver.resolveForMatch(d.team1Name, "", isNationalTeam = true)
+            val v2 = TeamFlagResolver.resolveForMatch(d.team2Name, "", isNationalTeam = true)
             fun enrich(list: List<LiveMatch>): List<LiveMatch> = list.map { m ->
                 if (m.id == matchId) {
                     m.copy(
@@ -1006,6 +1072,9 @@ class SportsStreamRepository(
 
     fun updateConfig(newConfig: AppConfig) {
         val previous = _config.value
+        if (newConfig.customM3uBlock.isNotBlank()) {
+            playlistMatcherService.registerAdminM3uBlock(newConfig.customM3uBlock)
+        }
         _config.value = newConfig
         saveData()
         rebuildCombinedMatches()
@@ -1037,6 +1106,7 @@ class SportsStreamRepository(
                     put("cricketSyncEnabled", newConfig.cricketSyncEnabled)
                     put("autoRefreshIntervalSec", newConfig.autoRefreshIntervalSec)
                     put("enabledFootballLeagues", leaguesArr)
+                    put("customM3uBlock", newConfig.customM3uBlock.take(120000))
                 }
                 cloudSyncRepository?.upsertPublicCatalogItem(
                     rawItemId = "global_app_config",
@@ -1075,6 +1145,7 @@ class SportsStreamRepository(
                 put("cricketSyncEnabled", cfg.cricketSyncEnabled)
                 put("autoRefreshIntervalSec", cfg.autoRefreshIntervalSec)
                 put("enabledFootballLeagues", leaguesArr)
+                put("customM3uBlock", cfg.customM3uBlock.take(120000))
             }
             syncRepo.upsertPublicCatalogItem(
                 rawItemId = "global_app_config",
@@ -1427,10 +1498,219 @@ class SportsStreamRepository(
             val existing = _channels.value.toMutableList()
             existing.addAll(0, parsedChannels)
             _channels.value = existing
+            playlistMatcherService.registerAdminM3uBlock(rawText)
+            val updatedCfg = _config.value.copy(
+                customM3uBlock = (_config.value.customM3uBlock + "\n" + rawText).trim().takeLast(100000)
+            )
+            _config.value = updatedCfg
+            rebuildCombinedMatches()
             saveData()
+
+            if (isFirebaseSignedIn()) {
+                repoScope.launch {
+                    updateConfig(updatedCfg)
+                    for (ch in parsedChannels.take(25)) {
+                        cloudSyncRepository?.upsertPublicCatalogItem(
+                            rawItemId = ch.id,
+                            itemType = "channel",
+                            title = ch.name,
+                            payloadJson = serializeSingleChannel(ch).toString()
+                        )
+                    }
+                }
+            }
         }
 
         parsedChannels.size
+    }
+
+    /**
+     * Concurrently scans a pasted M3U / `.m3u8` block, detects which streams are Active (HTTP 200 / HLS)
+     * vs Offline, and shows which Sport/League/Match each stream will auto-attach to.
+     */
+    suspend fun scanBulkM3uText(rawText: String): List<BulkM3uScanItem> = withContext(Dispatchers.IO) {
+        val fetchedText = if (rawText.trim().startsWith("http://", true) || rawText.trim().startsWith("https://", true)) {
+            if (!rawText.trim().contains("\n") && (rawText.trim().endsWith(".m3u", true) || rawText.trim().contains("raw.githubusercontent"))) {
+                try {
+                    val req = Request.Builder().url(rawText.trim()).build()
+                    httpClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) resp.body?.string().orEmpty() else rawText
+                    }
+                } catch (_: Exception) {
+                    rawText
+                }
+            } else {
+                rawText
+            }
+        } else {
+            rawText
+        }
+
+        val entries = playlistMatcherService.parseFlexibleAdminM3uText(fetchedText)
+        if (entries.isEmpty()) return@withContext emptyList()
+
+        val jobs = entries.map { entry ->
+            async {
+                val res = checkM3U8Stream(entry.url)
+                val targetDesc = playlistMatcherService.describeAutoMatchTarget(entry.name, entry.category)
+                BulkM3uScanItem(
+                    id = entry.id,
+                    name = entry.name,
+                    url = entry.url,
+                    category = entry.category,
+                    quality = entry.quality,
+                    logoUrl = entry.logoUrl,
+                    autoMatchedTarget = targetDesc,
+                    checkResult = res
+                )
+            }
+        }
+        jobs.awaitAll()
+    }
+
+    /**
+     * Auto-assigns scanned M3U8 items (either only Active ones or all) into:
+     * 1. `LivePlaylistMatcherService` (for automatic Cricket & Football match stream enrichment)
+     * 2. `_channels` (merging into existing channels or creating new channel cards)
+     * 3. `config.customM3uBlock` & Firestore `cloud_items` so all users receive the update in real time!
+     */
+    suspend fun applyScannedM3uItems(
+        items: List<BulkM3uScanItem>,
+        onlyActive: Boolean = true
+    ): Int = withContext(Dispatchers.IO) {
+        val selected = if (onlyActive) {
+            items.filter { it.checkResult?.isOnline == true }.ifEmpty { items }
+        } else {
+            items
+        }
+        if (selected.isEmpty()) return@withContext 0
+
+        val playlistEntries = selected.map { item ->
+            com.example.data.playlist.PlaylistEntry(
+                id = item.id,
+                name = item.name,
+                cleanName = item.name.lowercase(Locale.US).replace(Regex("[^a-z0-9 ]"), " ").trim(),
+                url = item.url,
+                quality = item.quality,
+                logoUrl = item.logoUrl,
+                category = item.category
+            )
+        }
+        val healthMap = selected.mapNotNull { item ->
+            item.checkResult?.let { item.url to it.isOnline }
+        }.toMap()
+
+        playlistMatcherService.registerAdminCustomM3uEntries(playlistEntries, healthMap)
+
+        val currentChannels = _channels.value.toMutableList()
+        val updatedChannelsForCloud = mutableListOf<SportsChannel>()
+
+        for (item in selected) {
+            val newStream = StreamSource(
+                id = "${item.id}-s",
+                name = "${item.name} (${item.quality})",
+                quality = item.quality,
+                url = item.url,
+                userAgent = item.userAgent,
+                referer = item.referer,
+                isDefault = true,
+                isEnabled = true,
+                priorityOrder = 1
+            )
+            val existingIdx = currentChannels.indexOfFirst {
+                it.name.equals(item.name, ignoreCase = true) ||
+                    it.name.lowercase(Locale.US).contains(item.name.lowercase(Locale.US).take(8))
+            }
+            if (existingIdx >= 0) {
+                val existingCh = currentChannels[existingIdx]
+                val mergedStreams = (listOf(newStream) + existingCh.streams.map { it.copy(isDefault = false, priorityOrder = it.priorityOrder + 1) })
+                    .distinctBy { it.url }
+                val updatedCh = existingCh.copy(streams = mergedStreams, isEnabled = true)
+                currentChannels[existingIdx] = updatedCh
+                updatedChannelsForCloud.add(updatedCh)
+            } else {
+                val createdCh = SportsChannel(
+                    id = item.id,
+                    name = item.name,
+                    category = item.category,
+                    logoText = item.name.take(4).uppercase(Locale.US),
+                    logoUrl = item.logoUrl,
+                    streams = listOf(newStream),
+                    isFavorite = false,
+                    isEnabled = true
+                )
+                currentChannels.add(0, createdCh)
+                updatedChannelsForCloud.add(createdCh)
+            }
+        }
+
+        _channels.value = currentChannels
+        val m3uBlockToSave = selected.joinToString("\n") {
+            "#EXTINF:-1 group-title=\"${it.category}\",${it.name}\n${it.url}"
+        }
+        val mergedM3uBlock = (_config.value.customM3uBlock + "\n" + m3uBlockToSave)
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("\n")
+            .takeLast(100000)
+
+        val newCfg = _config.value.copy(customM3uBlock = mergedM3uBlock)
+        _config.value = newCfg
+        rebuildCombinedMatches()
+        saveData()
+
+        if (isFirebaseSignedIn()) {
+            updateConfig(newCfg)
+            for (ch in updatedChannelsForCloud.take(30)) {
+                cloudSyncRepository?.upsertPublicCatalogItem(
+                    rawItemId = ch.id,
+                    itemType = "channel",
+                    title = ch.name,
+                    payloadJson = serializeSingleChannel(ch).toString()
+                )
+            }
+            _cloudSyncStatus.value = "Synced ${selected.size} active streams to All Users (Cloud Live)"
+        }
+        selected.size
+    }
+
+    /**
+     * Scans all streams across channels and removes dead/offline links while keeping at least 1 stream per channel.
+     */
+    suspend fun removeDeadStreamsFromChannels(): Int = withContext(Dispatchers.IO) {
+        var removedCount = 0
+        val updatedList = _channels.value.map { ch ->
+            if (ch.streams.size <= 1) {
+                ch
+            } else {
+                val checked = ch.streams.map { s ->
+                    s to checkM3U8Stream(s.url).isOnline
+                }
+                val alive = checked.filter { it.second }.map { it.first }
+                if (alive.isNotEmpty() && alive.size < ch.streams.size) {
+                    removedCount += (ch.streams.size - alive.size)
+                    ch.copy(streams = alive.mapIndexed { idx, s -> s.copy(isDefault = idx == 0, priorityOrder = idx + 1) })
+                } else {
+                    ch
+                }
+            }
+        }
+        if (removedCount > 0) {
+            _channels.value = updatedList
+            saveData()
+            if (isFirebaseSignedIn()) {
+                for (ch in updatedList) {
+                    cloudSyncRepository?.upsertPublicCatalogItem(
+                        rawItemId = ch.id,
+                        itemType = "channel",
+                        title = ch.name,
+                        payloadJson = serializeSingleChannel(ch).toString()
+                    )
+                }
+            }
+        }
+        removedCount
     }
 
     fun normalizeRemoteFeedUrl(url: String): String = url.trim()
@@ -1557,9 +1837,47 @@ class SportsStreamRepository(
     }
 
     private fun defaultChannels(): List<SportsChannel> {
-        val streamHls1 = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
-        val streamHls2 = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-        val streamHls3 = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8"
+        val tSportsUrl = "https://live-us1.thaimomo.com/live-as/chtsport-1/playlist.m3u8"
+        val tSportsRobiUrl = "https://robitv.com/rn/http://45.117.61.162/01_Tsports_HD/tracks-v1a1/mono.m3u8"
+        val aSportsUrl = "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/index.m3u8"
+        val aSportsTrackUrl = "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/tracks-v1a1/mono.ts.m3u8"
+        val ptvSportsUrl = "https://flussonic.defineatoz.com/PTV/index.m3u8"
+        val starSports2AynaUrl = "https://tvsen7.aynaott.com/ssport2hd/index.m3u8"
+        val willowAynaUrl = "https://tvsen5.aynaott.com/willowhd/index.m3u8"
+        val willowHerokuUrl = "https://warm-caverns-48629-92fab798385f.herokuapp.com/https://d36r8jifhgsk5j.cloudfront.net/Willow_TV540p.m3u8"
+        val willowUrl = "https://streams2.sofast.tv/ptnr-yupptv/title-cricketgold/v1/master/611d79b11b77e2f571934fd80ca1413453772ac7/b2048bb8-1686-4432-aa50-647245383e0c/manifest.m3u8"
+        val cricketGoldAynaUrl = "https://tvsen6.aynaott.com/M2W2UR49dmeKbZnmdRzN/index.m3u8"
+        val sonyTen1GpUrl = "https://drk6xq0vhn.gpcdn.net/live/ten_1_hd_720/index.m3u8"
+        val sonyTen2GpUrl = "https://drk6xq0vhn.gpcdn.net/live/ten_2_hd_720/index.m3u8"
+        val sonyTen5GpUrl = "https://drk6xq0vhn.gpcdn.net/live/ten_5_hd_720/index.m3u8"
+        val sonyTen1Url = "http://103.151.60.162:2122/play/a01c/index.m3u8?hls"
+        val sonyTen2Url = "http://103.151.60.162:2122/play/a01b/index.m3u8?hls"
+        val sonyTen3Url = "https://d3qs3d2rkhfqrt.cloudfront.net/out/v1/b17adfe543354fdd8d189b110617cddd/index.m3u8"
+        val starSelect1Url = "http://103.151.60.162:2122/play/a026/index.m3u8?hls"
+        val starSelect2Url = "http://103.151.60.162:2122/play/a027/index.m3u8?hls"
+        val starSports2Url = "http://103.151.60.162:2122/play/a00v/index.m3u8?hls"
+        val tenCricketUrl = "http://103.151.60.162:2122/play/a0fj/index.m3u8?hls"
+        val ddSportsHdUrl = "https://cdn.pishow.tv/ott/live/1161/master.m3u8"
+        val beinXtraUrl = "https://bein-xtra-bein.amagi.tv/playlist.m3u8"
+        val beinXtra1080pUrl = "https://bein-esp-xumo.amagi.tv/playlistR1080p.m3u8"
+        val beinXtra720pUrl = "https://bein-esp-xumo.amagi.tv/playlistR720P.m3u8"
+        val beinXtraEspUrl = "https://dc1644a9jazgj.cloudfront.net/beIN_Sports_Xtra_Espanol.m3u8"
+        val beinSport1Url = "http://ua102.online24.pm:8222/1101/video.m3u8"
+        val cbsGolazoUrl = "https://jmp2.uk/plu-63a0e33a45264d000850ed7e.m3u8"
+        val espnHdUrl = "https://jmp2.uk/plu-5e9f2c05172a0f0007db4786.m3u8"
+        val espnAynaUrl = "https://tvsen5.aynaott.com/espn/index.m3u8"
+        val espnBackupUrl = "http://181.78.197.59:8000/play/a07z/index.m3u8"
+        val tycSportsUrl = "https://m.mxonlive.xyz/nexusstream/tycsport.m3u8"
+        val telemundoUrl = "https://tda-nnaa-drct-pa6dy.fast.nbcuni.com/live/master_2.m3u8"
+        val tsn2Url = "https://tvsen7.aynascope.net/tsn2/index.m3u8"
+        val tsn3Url = "https://tvsen7.aynascope.net/tsn3/index.m3u8"
+        val realMadridTvUrl = "https://rmtv.akamaized.net/hls/live/2043154/rmtv-en-web/bitrate_3.m3u8"
+        val foxSports501Url = "https://raw.githubusercontent.com/stablesports711-hue/stable-sports-movie/refs/heads/main/IPTV/FOX501HD.m3u8"
+        val foxSports1Url = "http://85.237.89.160:9590/usa-s/FOX-SPORTS-1/index.m3u8"
+        val fuboSportsUrl = "https://wurlfubo.global.transmit.live/hls/67f42332d3dd98936978f581/v1/fubotv_fubo_sports_network_1/lg_us/latest/main/hls/playlist.m3u8"
+        val nbcSportsUrl = "https://xumo-xumoent-vc-122-sjv70.fast.nbcuni.com/live/master.m3u8"
+        val sportitaliaUrl = "https://edge-001.streamup.eu/sportitalia/sihd_abr/playlist.m3u8"
+        val fifaPlusUrl = "https://d2w9q46ikgrcwx.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-of5cbk3sav3w5/v1/sysdata_s_p_a_fifa_7/samsungheadend_us/latest/main/hls/playlist.m3u8"
 
         return listOf(
             SportsChannel(
@@ -1568,8 +1886,9 @@ class SportsStreamRepository(
                 category = "Bangla Sports",
                 logoText = "TS",
                 streams = listOf(
-                    StreamSource(name = "T SPORTS 1 FHD", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "T SPORTS 2 HD", quality = "HD", url = streamHls2, priorityOrder = 2, isBackup = true)
+                    StreamSource(name = "T SPORTS 1 FHD", quality = "1080p", url = tSportsUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "T SPORTS ROBITV HD", quality = "1080p", url = tSportsRobiUrl, priorityOrder = 2),
+                    StreamSource(name = "WILLOW CRICKET BACKUP", quality = "1080p", url = willowUrl, priorityOrder = 3, isBackup = true)
                 ),
                 isFavorite = true
             ),
@@ -1579,53 +1898,69 @@ class SportsStreamRepository(
                 category = "Bangla Sports",
                 logoText = "GTV",
                 streams = listOf(
-                    StreamSource(name = "GTV LIVE FHD", quality = "FHD", url = streamHls2, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "GTV BACKUP HD", quality = "HD", url = streamHls3, priorityOrder = 2, isBackup = true)
+                    StreamSource(name = "GTV / T SPORTS LIVE", quality = "1080p", url = tSportsUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "T SPORTS ROBITV", quality = "1080p", url = tSportsRobiUrl, priorityOrder = 2),
+                    StreamSource(name = "TEN CRICKET BACKUP", quality = "HD", url = tenCricketUrl, priorityOrder = 3, isBackup = true)
+                ),
+                isFavorite = true
+            ),
+            SportsChannel(
+                id = "ch-asports",
+                name = "A Sports HD",
+                category = "Pakistan",
+                logoText = "AS",
+                streams = listOf(
+                    StreamSource(name = "A SPORTS HD LIVE", quality = "1080p", url = aSportsUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "A SPORTS TRACK 2", quality = "1080p", url = aSportsTrackUrl, priorityOrder = 2),
+                    StreamSource(name = "PTV SPORTS BACKUP", quality = "1080p", url = ptvSportsUrl, priorityOrder = 3, isBackup = true)
                 ),
                 isFavorite = true
             ),
             SportsChannel(
                 id = "ch-1",
-                name = "TNT Sports",
+                name = "Star Sports Select 1 HD",
                 category = "Football",
-                logoText = "TNT",
+                logoText = "SS1",
                 streams = listOf(
-                    StreamSource(name = "TNT SPORTS 1 HD", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "TNT SPORTS 2 HD", quality = "HD", url = streamHls2, priorityOrder = 2),
-                    StreamSource(name = "TNT BACKUP SD", quality = "SD", url = streamHls3, priorityOrder = 3, isBackup = true)
+                    StreamSource(name = "STAR SPORTS SELECT 1 HD", quality = "1080p", url = starSelect1Url, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "STAR SPORTS SELECT 2 HD", quality = "1080p", url = starSelect2Url, priorityOrder = 2),
+                    StreamSource(name = "CBS GOLAZO BACKUP", quality = "720p", url = cbsGolazoUrl, priorityOrder = 3, isBackup = true)
                 ),
                 isFavorite = true
             ),
             SportsChannel(
                 id = "ch-2",
-                name = "TSN",
-                category = "Sports",
-                logoText = "TSN",
+                name = "CBS Sports Golazo",
+                category = "Football",
+                logoText = "CBS",
                 streams = listOf(
-                    StreamSource(name = "TSN 1 FHD", quality = "FHD", url = streamHls2, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "TSN 2 HD", quality = "HD", url = streamHls1, priorityOrder = 2)
+                    StreamSource(name = "CBS GOLAZO FHD", quality = "720p", url = cbsGolazoUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "FIFA+ GLOBAL HD", quality = "720p", url = fifaPlusUrl, priorityOrder = 2, isBackup = true)
                 )
             ),
             SportsChannel(
                 id = "ch-3",
-                name = "BeIN Sports",
+                name = "beIN Sports",
                 category = "Football",
                 logoText = "beIN",
                 streams = listOf(
-                    StreamSource(name = "BeIN SPORTS 1 PREMIUM", quality = "FHD", url = streamHls3, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "BeIN SPORTS 2 ENGLISH", quality = "FHD", url = streamHls1, priorityOrder = 2),
-                    StreamSource(name = "BeIN SERVER 3", quality = "HD", url = streamHls2, priorityOrder = 3, isBackup = true)
+                    StreamSource(name = "beIN SPORTS XTRA 1080P", quality = "1080p", url = beinXtra1080pUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "beIN SPORTS XTRA 720P", quality = "720p", url = beinXtra720pUrl, priorityOrder = 2),
+                    StreamSource(name = "beIN SPORTS XTRA ES", quality = "1080p", url = beinXtraEspUrl, priorityOrder = 3),
+                    StreamSource(name = "beIN SPORT 1 HD", quality = "1080p", url = beinSport1Url, priorityOrder = 4),
+                    StreamSource(name = "beIN SPORTS XTRA FHD", quality = "1080p", url = beinXtraUrl, priorityOrder = 5, isBackup = true)
                 ),
                 isFavorite = true
             ),
             SportsChannel(
                 id = "ch-4",
-                name = "FOX Sports",
-                category = "Sports",
-                logoText = "FOX",
+                name = "ESPN HD",
+                category = "Football",
+                logoText = "ESPN",
                 streams = listOf(
-                    StreamSource(name = "FS1 HD", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "FS2 HD", quality = "HD", url = streamHls2, priorityOrder = 2)
+                    StreamSource(name = "ESPN AYNA HD", quality = "1080p", url = espnAynaUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "ESPN 1 HD", quality = "720p", url = espnHdUrl, priorityOrder = 2),
+                    StreamSource(name = "ESPN BACKUP 1", quality = "720p", url = espnBackupUrl, priorityOrder = 3, isBackup = true)
                 )
             ),
             SportsChannel(
@@ -1633,28 +1968,52 @@ class SportsStreamRepository(
                 name = "Sony Sports Ten 1",
                 category = "SonyLiv Live",
                 logoText = "TEN1",
-                streams = listOf(StreamSource(name = "SONY TEN 1 FHD", quality = "FHD", url = streamHls2, isDefault = true, priorityOrder = 1))
+                streams = listOf(
+                    StreamSource(name = "SONY SPORTS 1 GPCDN", quality = "720p", url = sonyTen1GpUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "SONY TEN 1 HD", quality = "HD", url = sonyTen1Url, priorityOrder = 2),
+                    StreamSource(name = "SONY TEN 3 HINDI", quality = "HD", url = sonyTen3Url, priorityOrder = 3, isBackup = true)
+                ),
+                isFavorite = true
             ),
             SportsChannel(
                 id = "ch-6",
                 name = "Sony Sports Ten 2",
                 category = "SonyLiv Live",
                 logoText = "TEN2",
-                streams = listOf(StreamSource(name = "SONY TEN 2 FHD", quality = "FHD", url = streamHls3, isDefault = true, priorityOrder = 1))
+                streams = listOf(
+                    StreamSource(name = "SONY SPORTS 2 GPCDN", quality = "720p", url = sonyTen2GpUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "SONY TEN 2 HD", quality = "HD", url = sonyTen2Url, priorityOrder = 2),
+                    StreamSource(name = "SONY SPORTS 5 GPCDN", quality = "720p", url = sonyTen5GpUrl, priorityOrder = 3, isBackup = true)
+                )
+            ),
+            SportsChannel(
+                id = "ch-7",
+                name = "Sony Sports Ten 5",
+                category = "SonyLiv Live",
+                logoText = "TEN5",
+                streams = listOf(
+                    StreamSource(name = "SONY SPORTS 5 GPCDN", quality = "720p", url = sonyTen5GpUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "SONY SPORTS 1 GPCDN", quality = "720p", url = sonyTen1GpUrl, priorityOrder = 2, isBackup = true)
+                )
             ),
             SportsChannel(
                 id = "ch-8",
-                name = "ICC TV Official",
+                name = "DD Sports HD",
                 category = "Cricket",
-                logoText = "ICC",
-                streams = listOf(StreamSource(name = "ICC TV LIVE FHD", quality = "FHD", url = streamHls2, isDefault = true, priorityOrder = 1))
+                logoText = "DD",
+                streams = listOf(
+                    StreamSource(name = "DD SPORTS FHD", quality = "1080p", url = ddSportsHdUrl, isDefault = true, priorityOrder = 1)
+                )
             ),
             SportsChannel(
                 id = "ch-9",
-                name = "CricHD Live 1",
+                name = "Ten Cricket Live",
                 category = "Cricket",
-                logoText = "CRIC",
-                streams = listOf(StreamSource(name = "CRICHD SERVER 1", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1))
+                logoText = "TEN",
+                streams = listOf(
+                    StreamSource(name = "TEN CRICKET HD", quality = "HD", url = tenCricketUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "CRICKET GOLD HD", quality = "1080p", url = cricketGoldAynaUrl, priorityOrder = 2)
+                )
             ),
             SportsChannel(
                 id = "ch-18",
@@ -1662,57 +2021,60 @@ class SportsStreamRepository(
                 category = "Cricket",
                 logoText = "STAR",
                 streams = listOf(
-                    StreamSource(name = "STAR SPORTS 1 HD", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "STAR SPORTS SELECT 1", quality = "HD", url = streamHls2, priorityOrder = 2)
+                    StreamSource(name = "STAR SPORTS 2 AYNA HD", quality = "1080p", url = starSports2AynaUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "STAR SPORTS 2 HD", quality = "HD", url = starSports2Url, priorityOrder = 2),
+                    StreamSource(name = "STAR SPORTS SELECT 1", quality = "1080p", url = starSelect1Url, priorityOrder = 3)
                 ),
                 isFavorite = true
             ),
             SportsChannel(
                 id = "ch-19",
-                name = "FanCode",
-                category = "FanCode IND",
-                logoText = "FC",
+                name = "Sportitalia / TyC Sports",
+                category = "Football",
+                logoText = "TYC",
                 streams = listOf(
-                    StreamSource(name = "FANCODE LIVE 1", quality = "FHD", url = streamHls3, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "FANCODE LIVE 2", quality = "HD", url = streamHls1, priorityOrder = 2)
+                    StreamSource(name = "TYC SPORTS ARGENTINA", quality = "1080p", url = tycSportsUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "TELEMUNDO DEPORTES", quality = "1080p", url = telemundoUrl, priorityOrder = 2),
+                    StreamSource(name = "SPORTITALIA LIVE", quality = "1080p", url = sportitaliaUrl, priorityOrder = 3),
+                    StreamSource(name = "REAL MADRID TV", quality = "1080p", url = realMadridTvUrl, priorityOrder = 4)
                 )
             ),
             SportsChannel(
                 id = "ch-20",
-                name = "PTV Sports",
+                name = "PTV / Ten Sports PK",
                 category = "Pakistan",
                 logoText = "PTV",
                 streams = listOf(
-                    StreamSource(name = "PTV SPORTS HD LIVE", quality = "FHD", url = streamHls2, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "PTV SPORTS SD", quality = "SD", url = streamHls3, priorityOrder = 2, isBackup = true)
+                    StreamSource(name = "PTV SPORTS FLUSSONIC HD", quality = "1080p", url = ptvSportsUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "A SPORTS HD PK", quality = "1080p", url = aSportsUrl, priorityOrder = 2),
+                    StreamSource(name = "TEN CRICKET PK", quality = "HD", url = tenCricketUrl, priorityOrder = 3, isBackup = true)
                 ),
                 isFavorite = true
             ),
             SportsChannel(
                 id = "ch-21",
-                name = "A Sports",
-                category = "Pakistan",
-                logoText = "A",
-                streams = listOf(StreamSource(name = "A SPORTS HD", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1))
-            ),
-            SportsChannel(
-                id = "ch-23",
-                name = "Tapmad PK",
-                category = "Tapmad PK",
-                logoText = "tapmad",
+                name = "TSN / FOX Sports HD",
+                category = "Football",
+                logoText = "TSN",
                 streams = listOf(
-                    StreamSource(name = "TAPMAD LIVE 1", quality = "FHD", url = streamHls3, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "TAPMAD LIVE 2", quality = "HD", url = streamHls1, priorityOrder = 2)
+                    StreamSource(name = "TSN 2 HD", quality = "1080p", url = tsn2Url, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "TSN 3 HD", quality = "1080p", url = tsn3Url, priorityOrder = 2),
+                    StreamSource(name = "FOX SPORTS 501 HD", quality = "1080p", url = foxSports501Url, priorityOrder = 3),
+                    StreamSource(name = "FOX SPORTS 1 HD", quality = "720p", url = foxSports1Url, priorityOrder = 4),
+                    StreamSource(name = "FUBO SPORTS FHD", quality = "1080p", url = fuboSportsUrl, priorityOrder = 5),
+                    StreamSource(name = "NBC SPORTS FHD", quality = "1080p", url = nbcSportsUrl, priorityOrder = 6, isBackup = true)
                 )
             ),
             SportsChannel(
                 id = "ch-24",
-                name = "Willow Cricket",
+                name = "Willow Cricket HD",
                 category = "Cricket",
                 logoText = "WILLOW",
                 streams = listOf(
-                    StreamSource(name = "WILLOW HD 1", quality = "FHD", url = streamHls1, isDefault = true, priorityOrder = 1),
-                    StreamSource(name = "WILLOW HD 2", quality = "HD", url = streamHls2, priorityOrder = 2)
+                    StreamSource(name = "WILLOW TV AYNA HD", quality = "1080p", url = willowAynaUrl, isDefault = true, priorityOrder = 1),
+                    StreamSource(name = "WILLOW SPORTS 540P", quality = "540p", url = willowHerokuUrl, priorityOrder = 2),
+                    StreamSource(name = "WILLOW SPORTS FHD", quality = "1080p", url = willowUrl, priorityOrder = 3),
+                    StreamSource(name = "CRICKET GOLD HD", quality = "1080p", url = cricketGoldAynaUrl, priorityOrder = 4)
                 ),
                 isFavorite = true
             )

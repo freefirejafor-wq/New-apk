@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -19,34 +20,41 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.activity.compose.BackHandler
+import androidx.credentials.CredentialManager
+import coil.compose.AsyncImage
+import com.example.R
 import com.example.data.espn.EspnFootballService
 import com.example.data.model.*
 import com.example.data.repository.SportsStreamRepository
-import com.example.ui.components.QualityBadge
+import com.example.data.util.TeamFlagResolver
+import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.onGoogleSignInClicked
+import com.example.ui.components.MatchCard
 import com.example.ui.theme.*
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.UUID
 
-enum class AdminTab(val label: String) {
-    M3U8_CHECKER("M3U8 Checker"),
-    CHANNELS("Channels & Streams"),
-    MATCHES("Live Matches"),
-    SETTINGS("App Control")
+enum class AdminTab(val label: String, val icon: ImageVector) {
+    MATCHES("Live Events", Icons.Default.Podcasts),
+    CHANNELS("Sports TV", Icons.Default.SportsSoccer),
+    M3U8_CHECKER("M3U8 Auto", Icons.Default.PlaylistAddCheck),
+    SETTINGS("App Control", Icons.Default.FormatListBulleted)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,126 +65,305 @@ fun AdminPanelScreen(
     onTestPlayStream: (StreamSource) -> Unit
 ) {
     BackHandler(onBack = onBackClick)
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+
+    val authFlow = remember {
+        runCatching { Firebase.auth.authStateFlow() }.getOrElse { kotlinx.coroutines.flow.flowOf(null) }
+    }
+    val initialUser = remember { runCatching { Firebase.auth.currentUser }.getOrNull() }
+    val currentUser by authFlow.collectAsState(initial = initialUser)
+
     val matches by repository.matches.collectAsState()
     val channels by repository.channels.collectAsState()
     val config by repository.config.collectAsState()
     val cloudSyncStatus by repository.cloudSyncStatus.collectAsState()
     val providerDiagnostics by repository.providerDiagnostics.collectAsState()
-    val unmappedNotices by repository.unmappedNotices.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(AdminTab.M3U8_CHECKER) }
+    var selectedTab by remember { mutableStateOf(AdminTab.MATCHES) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var isPushingCloud by remember { mutableStateOf(false) }
 
-    // Dialog states
+    // Filter states for Admin Live Events tab (matching LiveEventsScreen)
+    var selectedSport by remember { mutableStateOf(SportType.ALL) }
+    var selectedStatus by remember { mutableStateOf<MatchStatus?>(null) }
+    var selectedChannelCategory by remember { mutableStateOf("All") }
+
+    // Modal Dialog states
     var showAddChannelDialog by remember { mutableStateOf(false) }
     var channelBeingEdited by remember { mutableStateOf<SportsChannel?>(null) }
     var showAddMatchDialog by remember { mutableStateOf(false) }
     var matchBeingEdited by remember { mutableStateOf<LiveMatch?>(null) }
+    var showLeagueQuickModal by remember { mutableStateOf(false) }
+
+    fun pushUpdatesToAllUsers(customMessage: String? = null) {
+        coroutineScope.launch {
+            isPushingCloud = true
+            val res = repository.pushAllToCloudServer()
+            isPushingCloud = false
+            res.fold(
+                onSuccess = { count ->
+                    snackbarHostState.showSnackbar(
+                        customMessage ?: "লাইভ আপডেট সফল! $count টি আইটেম সব ইউজারের ফোনে পাঠিয়ে দেওয়া হয়েছে।"
+                    )
+                },
+                onFailure = {
+                    snackbarHostState.showSnackbar(
+                        customMessage ?: "লোকাল সেভ হয়েছে (সব ইউজারকে লাইভ আপডেট দিতে Google Sign-In করুন)"
+                    )
+                }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.AdminPanelSettings,
-                            contentDescription = null,
-                            tint = GoldYellow,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Admin Control Panel",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0B111E))
+                    .statusBarsPadding()
+            ) {
+                // Exact same TopSportsBar visual style with Back button, Logo, Title & right-side Telegram/Refresh/Search icons
+                if (isSearching) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("admin_search_input"),
+                            placeholder = {
+                                Text(
+                                    "Search matches, leagues, channels, streams...",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = CyanAccent,
+                                unfocusedBorderColor = NavyBorder,
+                                focusedContainerColor = NavySurface,
+                                unfocusedContainerColor = NavySurface
+                            ),
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    isSearching = false
+                                    searchQuery = ""
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close search", tint = TextSecondary)
+                                }
+                            }
                         )
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = TextPrimary
-                        )
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            IconButton(
+                                onClick = onBackClick,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back to App",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White)
+                                    .border(1.2.dp, Color(0xFFFF5722), RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_app_logo),
+                                    contentDescription = "App Logo",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = config.appTitle,
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White,
+                                            fontSize = 18.sp
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        color = CyanAccent.copy(alpha = 0.18f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.border(0.8.dp, CyanAccent, RoundedCornerShape(6.dp))
+                                    ) {
+                                        Text(
+                                            text = "ADMIN",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = CyanAccent,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 9.sp
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (currentUser != null) "🟢 Cloud Live • ${currentUser?.email ?: "Synced"}" else "⚪ Local Mode • Sign in to broadcast",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (currentUser != null) LiveGreen else GoldYellow,
+                                        fontSize = 10.sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Exact same Telegram circle button with purple-pink ring border
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF28A8E9))
+                                    .border(
+                                        width = 1.8.dp,
+                                        brush = Brush.linearGradient(
+                                            colors = listOf(Color(0xFFA855F7), Color(0xFFEC4899))
+                                        ),
+                                        shape = CircleShape
+                                    )
+                                    .clickable {
+                                        selectedTab = AdminTab.SETTINGS
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Send,
+                                    contentDescription = "Telegram Settings",
+                                    tint = Color.White,
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .offset(x = (-1).dp, y = 0.dp)
+                                )
+                            }
+
+                            // Refresh / Cloud Push icon button
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Syncing live matches, playlists & cloud updates...")
+                                            repository.refreshLiveMatches(force = true)
+                                            pushUpdatesToAllUsers("সকল ম্যাচ, চ্যানেল ও প্লেলিস্ট রিফ্রেশ এবং ইউজারদের কাছে সিঙ্ক হয়েছে!")
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isPushingCloud) {
+                                    CircularProgressIndicator(
+                                        color = CyanAccent,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Refresh & Sync",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+
+                            // Search icon button
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .clickable { isSearching = !isSearching },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = NavyDark)
+                }
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
+        bottomBar = {
+            // Exact same floating rounded pill navigation bar as BottomSportsNavBar
+            AdminBottomPillNavBar(
+                selectedTab = selectedTab,
+                onTabSelected = { selectedTab = it }
             )
         },
-        containerColor = NavyDark
+        containerColor = Color(0xFF0B111E)
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .background(Color(0xFF0B111E))
         ) {
-            // Admin Tabs Navigation
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(NavySurface)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                AdminTab.values().forEach { tab ->
-                    val isSelected = tab == selectedTab
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { selectedTab = tab },
-                        label = {
-                            Text(
-                                text = tab.label,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 12.sp
-                                )
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = GoldYellow,
-                            selectedLabelColor = Color.Black,
-                            containerColor = NavySurfaceVariant,
-                            labelColor = TextSecondary
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            enabled = true,
-                            selected = isSelected,
-                            borderColor = if (isSelected) GoldYellow else NavyBorder
-                        )
-                    )
-                }
-            }
-
-            // Tab Content
             when (selectedTab) {
-                AdminTab.M3U8_CHECKER -> {
-                    M3U8StreamCheckerTab(
-                        repository = repository,
-                        onTestPlayStream = onTestPlayStream
-                    )
-                }
-                AdminTab.CHANNELS -> {
-                    ChannelsManagerTab(
-                        channels = channels,
-                        onAddChannelClick = {
-                            channelBeingEdited = null
-                            showAddChannelDialog = true
-                        },
-                        onEditChannelClick = { ch ->
-                            channelBeingEdited = ch
-                            showAddChannelDialog = true
-                        },
-                        onDeleteChannel = { repository.deleteChannel(it) },
-                        onTestPlayStream = onTestPlayStream
-                    )
-                }
                 AdminTab.MATCHES -> {
-                    MatchesManagerTab(
+                    AdminLiveEventsSection(
                         matches = matches,
+                        channels = channels,
+                        config = config,
+                        selectedSport = selectedSport,
+                        onSportSelect = { selectedSport = it },
+                        selectedStatus = selectedStatus,
+                        onStatusSelect = { selectedStatus = it },
+                        searchQuery = searchQuery,
                         onAddMatchClick = {
                             matchBeingEdited = null
                             showAddMatchDialog = true
@@ -185,44 +372,137 @@ fun AdminPanelScreen(
                             matchBeingEdited = match
                             showAddMatchDialog = true
                         },
-                        onDeleteMatch = { repository.deleteMatch(it) },
-                        onToggleStatus = { match ->
-                            val nextStatus = when (match.status) {
-                                MatchStatus.UPCOMING -> MatchStatus.LIVE
-                                MatchStatus.LIVE -> MatchStatus.FINISHED
-                                MatchStatus.FINISHED -> MatchStatus.LIVE
-                                MatchStatus.UNKNOWN -> MatchStatus.UPCOMING
+                        onDeleteMatchClick = { matchId ->
+                            repository.deleteMatch(matchId)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("ম্যাচটি হাইড করা হয়েছে এবং সব ইউজারের জন্য আপডেট হয়েছে।")
                             }
-                            repository.addOrUpdateMatch(match.copy(status = nextStatus))
                         },
-                        onTestPlayStream = onTestPlayStream
+                        onQuickStatusChange = { match, newStatus ->
+                            val updated = match.copy(
+                                status = newStatus,
+                                timeOrScore = when (newStatus) {
+                                    MatchStatus.LIVE -> "LIVE"
+                                    MatchStatus.FINISHED -> "Finished"
+                                    else -> match.timeOrScore
+                                }
+                            )
+                            repository.addOrUpdateMatch(updated)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("${match.team1Code} vs ${match.team2Code} -> ${newStatus.name} সব ইউজারের জন্য আপডেট হয়েছে!")
+                            }
+                        },
+                        onTestPlayStream = onTestPlayStream,
+                        onOpenLeagueFilterModal = { showLeagueQuickModal = true },
+                        onPushAllToCloud = { pushUpdatesToAllUsers() }
                     )
                 }
+
+                AdminTab.CHANNELS -> {
+                    AdminSportsChannelsSection(
+                        channels = channels,
+                        selectedCategory = selectedChannelCategory,
+                        onCategorySelect = { selectedChannelCategory = it },
+                        searchQuery = searchQuery,
+                        onAddChannelClick = {
+                            channelBeingEdited = null
+                            showAddChannelDialog = true
+                        },
+                        onEditChannelClick = { ch ->
+                            channelBeingEdited = ch
+                            showAddChannelDialog = true
+                        },
+                        onToggleChannelEnabled = { ch ->
+                            val updated = ch.copy(isEnabled = !ch.isEnabled)
+                            repository.addOrUpdateChannel(updated)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "${updated.name} ${if (updated.isEnabled) "Enabled" else "Hidden"} for all users!"
+                                )
+                            }
+                        },
+                        onDeleteChannelClick = { chId ->
+                            repository.deleteChannel(chId)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("চ্যানেলটি ডিলিট করা হয়েছে এবং সব ইউজারের জন্য সিঙ্ক হয়েছে।")
+                            }
+                        },
+                        onTestPlayStream = onTestPlayStream,
+                        onCleanDeadLinks = {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Scanning all channel servers for dead links...")
+                                val removed = repository.removeDeadStreamsFromChannels()
+                                snackbarHostState.showSnackbar("Cleaned $removed offline links & synced active servers!")
+                            }
+                        }
+                    )
+                }
+
+                AdminTab.M3U8_CHECKER -> {
+                    AdminBulkM3u8ScannerSection(
+                        repository = repository,
+                        onTestPlayStream = onTestPlayStream,
+                        onShowMessage = { msg ->
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    )
+                }
+
                 AdminTab.SETTINGS -> {
-                    AppSettingsTab(
+                    AdminAppControlSection(
                         config = config,
+                        currentUserEmail = currentUser?.email,
                         cloudSyncStatus = cloudSyncStatus,
                         providerDiagnostics = providerDiagnostics,
-                        unmappedNotices = unmappedNotices,
-                        onDismissUnmappedNotice = { repository.dismissUnmappedNotice(it) },
-                        onTriggerProviderSync = {
-                            repository.refreshLiveMatches(force = true)
-                            repository.refreshUpcomingMatches(force = true)
-                            repository.refreshFinishedMatches(force = true)
+                        onGoogleSignIn = {
+                            onGoogleSignInClicked(
+                                context = context,
+                                credentialManager = credentialManager,
+                                onAuthSuccess = {
+                                    val uid = Firebase.auth.currentUser?.uid
+                                    if (uid != null) repository.startCloudSyncForUser(uid)
+                                    pushUpdatesToAllUsers("Google Admin সংযুক্ত হয়েছে এবং ক্লাউড সিঙ্ক চালু হয়েছে!")
+                                },
+                                onAuthError = { err ->
+                                    coroutineScope.launch { snackbarHostState.showSnackbar(err) }
+                                },
+                                scope = coroutineScope
+                            )
                         },
-                        onUpdateConfig = { repository.updateConfig(it) },
-                        onResetDefaults = { repository.resetToDefaults() },
-                        onSyncRemote = { repository.syncFromRemoteFeed(it) },
-                        onPushAllToCloud = { repository.pushAllToCloudServer() },
-                        onExportDataJson = { repository.exportCurrentDataAsJson() }
+                        onSaveConfig = { updatedConfig ->
+                            repository.updateConfig(updatedConfig)
+                            pushUpdatesToAllUsers("অ্যাপ কনফিগারেশন সেভ হয়েছে এবং সব ইউজারের ফোনে লাইভ আপডেট হয়েছে!")
+                        },
+                        onPushAllCloud = { pushUpdatesToAllUsers() },
+                        onOpenLeagueModal = { showLeagueQuickModal = true },
+                        onSyncRemoteFeedNow = {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Syncing remote feed & live M3U playlists...")
+                                val res = repository.syncFromRemoteFeed()
+                                res.fold(
+                                    onSuccess = { total ->
+                                        snackbarHostState.showSnackbar("Synced $total matches & active streams!")
+                                    },
+                                    onFailure = { err ->
+                                        snackbarHostState.showSnackbar("Sync error: ${err.localizedMessage}")
+                                    }
+                                )
+                            }
+                        },
+                        onResetDefaults = {
+                            repository.resetToDefaults()
+                            pushUpdatesToAllUsers("ডিফল্ট চ্যানেল ও সেটিংস রিস্টোর করা হয়েছে।")
+                        }
                     )
                 }
             }
         }
     }
 
-    // Add or Edit Channel Dialog with Multiple Streams Available
-    if (showAddChannelDialog) {
+    // Modal: Add or Edit Channel with Multi-Streams & Custom Headers
+    if (showAddChannelDialog || channelBeingEdited != null) {
         AddChannelModalDialog(
             channelToEdit = channelBeingEdited,
             onDismiss = {
@@ -233,6 +513,9 @@ fun AdminPanelScreen(
                 repository.addOrUpdateChannel(newChannel)
                 showAddChannelDialog = false
                 channelBeingEdited = null
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("${newChannel.name} সেভ হয়েছে এবং সব ইউজারের ফোনে আপডেট হয়েছে!")
+                }
             },
             onCheckUrl = { url, callback ->
                 coroutineScope.launch {
@@ -243,18 +526,22 @@ fun AdminPanelScreen(
         )
     }
 
-    // Add or Edit Match Dialog with Multiple Streams Available
-    if (showAddMatchDialog) {
+    // Modal: Add or Edit Match with Multi-Streams, Channel Picker & Custom Headers
+    if (showAddMatchDialog || matchBeingEdited != null) {
         AddMatchModalDialog(
             matchToEdit = matchBeingEdited,
+            availableChannels = channels,
             onDismiss = {
                 showAddMatchDialog = false
                 matchBeingEdited = null
             },
-            onSaveMatch = { savedMatch ->
-                repository.addOrUpdateMatch(savedMatch)
+            onSaveMatch = { newMatch ->
+                repository.addOrUpdateMatch(newMatch)
                 showAddMatchDialog = false
                 matchBeingEdited = null
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("${newMatch.team1Name} vs ${newMatch.team2Name} এর স্ট্রিম সব ইউজারের জন্য আপডেট হয়েছে!")
+                }
             },
             onCheckUrl = { url, callback ->
                 coroutineScope.launch {
@@ -264,224 +551,463 @@ fun AdminPanelScreen(
             }
         )
     }
+
+    // Modal: Football & Cricket League Visibility Manager
+    if (showLeagueQuickModal) {
+        LeagueVisibilityDialog(
+            config = config,
+            onDismiss = { showLeagueQuickModal = false },
+            onSaveConfig = { newConfig ->
+                repository.updateConfig(newConfig)
+                showLeagueQuickModal = false
+                pushUpdatesToAllUsers("লিগ ফিল্টার সেভ হয়েছে এবং সব ইউজারের জন্য আপডেট হয়েছে!")
+            }
+        )
+    }
 }
 
-// TAB 1: M3U8 STREAM CHECKER
 @Composable
-fun M3U8StreamCheckerTab(
-    repository: SportsStreamRepository,
-    onTestPlayStream: (StreamSource) -> Unit
+private fun AdminBottomPillNavBar(
+    selectedTab: AdminTab,
+    onTabSelected: (AdminTab) -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var urlInput by remember { mutableStateOf("https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8") }
-    var isChecking by remember { mutableStateOf(false) }
-    var checkResult by remember { mutableStateOf<M3U8CheckResult?>(null) }
-
-    LazyColumn(
+    Box(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        item {
-            Card(
+        Surface(
+            color = Color(0xFF1A2434),
+            shape = RoundedCornerShape(38.dp),
+            tonalElevation = 10.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(70.dp)
+                .border(
+                    width = 1.dp,
+                    color = Color(0xFF28374E),
+                    shape = RoundedCornerShape(38.dp)
+                )
+        ) {
+            Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "M3U8 & HLS Stream Health Checker",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Verify whether an M3U8 live stream is online, check latency, response code, and test play directly.",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
-                    )
+                AdminTab.values().forEach { tab ->
+                    val isSelected = tab == selectedTab
+                    val activeCyan = Color(0xFF00D1C1)
+                    val inactiveGrey = Color(0xFF94A3B8)
 
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("admin_m3u8_url_input"),
-                        label = { Text("Stream URL (M3U8 / HLS / MP4)") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        ),
-                        singleLine = false,
-                        maxLines = 3
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Preset Test URLs
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = "Sample Streams:",
-                            style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary),
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        )
-                        AssistChip(
-                            onClick = { urlInput = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8" },
-                            label = { Text("Akamai Live", fontSize = 11.sp) }
-                        )
-                        AssistChip(
-                            onClick = { urlInput = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" },
-                            label = { Text("Mux HLS", fontSize = 11.sp) }
-                        )
-                        AssistChip(
-                            onClick = { urlInput = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8" },
-                            label = { Text("Sintel HLS", fontSize = 11.sp) }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Button(
-                        onClick = {
-                            isChecking = true
-                            checkResult = null
-                            coroutineScope.launch {
-                                val res = repository.checkM3U8Stream(urlInput)
-                                checkResult = res
-                                isChecking = false
-                            }
-                        },
-                        enabled = !isChecking && urlInput.isNotBlank(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("admin_check_stream_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        if (isChecking) {
-                            CircularProgressIndicator(
-                                color = Color.Black,
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(vertical = 4.dp, horizontal = 2.dp)
+                            .clip(RoundedCornerShape(32.dp))
+                            .background(
+                                if (isSelected) Color(0xFF223348) else Color.Transparent
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Testing Stream...", color = Color.Black, fontWeight = FontWeight.Bold)
-                        } else {
-                            Icon(Icons.Default.NetworkCheck, contentDescription = null, tint = Color.Black)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Check Stream Now", color = Color.Black, fontWeight = FontWeight.Bold)
+                            .clickable { onTabSelected(tab) }
+                            .testTag("admin_tab_${tab.name.lowercase()}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = if (isSelected) activeCyan else inactiveGrey,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = tab.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (isSelected) activeCyan else inactiveGrey,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 10.sp
+                                ),
+                                maxLines = 1
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
 
-        // Check Result Card
-        checkResult?.let { result ->
-            item {
-                val isSuccess = result.isOnline
-                val cardBorder = if (isSuccess) LiveGreen else LiveRed
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.5.dp, cardBorder, RoundedCornerShape(14.dp)),
-                    colors = CardDefaults.cardColors(containerColor = NavySurface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+// =========================================================================================
+// TAB 1: ADMIN LIVE EVENTS SECTION (EXACT SAME UI AS LiveEventsScreen + ADMIN STREAM PINNING)
+// =========================================================================================
+@Composable
+private fun AdminLiveEventsSection(
+    matches: List<LiveMatch>,
+    channels: List<SportsChannel>,
+    config: AppConfig,
+    selectedSport: SportType,
+    onSportSelect: (SportType) -> Unit,
+    selectedStatus: MatchStatus?,
+    onStatusSelect: (MatchStatus?) -> Unit,
+    searchQuery: String,
+    onAddMatchClick: () -> Unit,
+    onEditMatchClick: (LiveMatch) -> Unit,
+    onDeleteMatchClick: (String) -> Unit,
+    onQuickStatusChange: (LiveMatch, MatchStatus) -> Unit,
+    onTestPlayStream: (StreamSource) -> Unit,
+    onOpenLeagueFilterModal: () -> Unit,
+    onPushAllToCloud: () -> Unit
+) {
+    val totalCount = matches.size
+    val cricketCount = remember(matches) { matches.count { it.sport == SportType.CRICKET } }
+    val footballCount = remember(matches) { matches.count { it.sport == SportType.FOOTBALL } }
+
+    val sportFilteredMatches = remember(matches, selectedSport, searchQuery) {
+        matches.filter { match ->
+            val sportMatches = when (selectedSport) {
+                SportType.ALL -> true
+                else -> match.sport == selectedSport
+            }
+            val queryMatches = if (searchQuery.isBlank()) true else {
+                match.team1Name.contains(searchQuery, ignoreCase = true) ||
+                    match.team2Name.contains(searchQuery, ignoreCase = true) ||
+                    match.team1Code.contains(searchQuery, ignoreCase = true) ||
+                    match.team2Code.contains(searchQuery, ignoreCase = true) ||
+                    match.tournament.contains(searchQuery, ignoreCase = true)
+            }
+            sportMatches && queryMatches
+        }
+    }
+
+    val allStatusCount = sportFilteredMatches.size
+    val liveStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.LIVE }
+    }
+    val upcomingStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.UPCOMING || it.status == MatchStatus.UNKNOWN }
+    }
+    val finishedStatusCount = remember(sportFilteredMatches) {
+        sportFilteredMatches.count { it.status == MatchStatus.FINISHED }
+    }
+
+    val filteredMatches = remember(sportFilteredMatches, selectedStatus) {
+        when (selectedStatus) {
+            null -> sportFilteredMatches
+            MatchStatus.UPCOMING -> sportFilteredMatches.filter {
+                it.status == MatchStatus.UPCOMING || it.status == MatchStatus.UNKNOWN
+            }
+            else -> sportFilteredMatches.filter { it.status == selectedStatus }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B111E))
+    ) {
+        // 1. Exact same Top Sport Selector Row (All, Cricket, Football) from LiveEventsScreen
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SportIconTopCard(
+                sportType = SportType.ALL,
+                badgeCount = totalCount,
+                isSelected = selectedSport == SportType.ALL,
+                showTextLabel = true,
+                label = "All",
+                onClick = { onSportSelect(SportType.ALL) }
+            )
+
+            SportIconTopCard(
+                sportType = SportType.CRICKET,
+                badgeCount = cricketCount,
+                isSelected = selectedSport == SportType.CRICKET,
+                showTextLabel = false,
+                label = "Cricket",
+                onClick = {
+                    onSportSelect(if (selectedSport == SportType.CRICKET) SportType.ALL else SportType.CRICKET)
+                }
+            )
+
+            SportIconTopCard(
+                sportType = SportType.FOOTBALL,
+                badgeCount = footballCount,
+                isSelected = selectedSport == SportType.FOOTBALL,
+                showTextLabel = false,
+                label = "Football",
+                onClick = {
+                    onSportSelect(if (selectedSport == SportType.FOOTBALL) SportType.ALL else SportType.FOOTBALL)
+                }
+            )
+        }
+
+        // 2. Exact same Status Filter Pills Row (All, Live, Upcoming, Finished)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusFilterPill(
+                label = "All ($allStatusCount)",
+                isSelected = selectedStatus == null,
+                onClick = { onStatusSelect(null) },
+                tag = "admin_filter_all"
+            )
+            StatusFilterPill(
+                label = "Live ($liveStatusCount)",
+                isSelected = selectedStatus == MatchStatus.LIVE,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.LIVE) null else MatchStatus.LIVE)
+                },
+                tag = "admin_filter_live"
+            )
+            StatusFilterPill(
+                label = "Upcoming ($upcomingStatusCount)",
+                isSelected = selectedStatus == MatchStatus.UPCOMING,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.UPCOMING) null else MatchStatus.UPCOMING)
+                },
+                tag = "admin_filter_upcoming"
+            )
+            StatusFilterPill(
+                label = "Finished ($finishedStatusCount)",
+                isSelected = selectedStatus == MatchStatus.FINISHED,
+                onClick = {
+                    onStatusSelect(if (selectedStatus == MatchStatus.FINISHED) null else MatchStatus.FINISHED)
+                },
+                tag = "admin_filter_finished"
+            )
+        }
+
+        // 3. Compact Admin Action Bar (Add Match, League Visibility, Push to All Users)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = onAddMatchClick,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add Match", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+
+            OutlinedButton(
+                onClick = onOpenLeagueFilterModal,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.6f)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    "Leagues (${config.enabledFootballLeagues.size})",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp
+                )
+            }
+
+            OutlinedButton(
+                onClick = onPushAllToCloud,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, LiveGreen.copy(alpha = 0.7f)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = LiveGreen, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("Sync to Users", color = LiveGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+
+        // 4. Match Cards List (Exact same MatchCard + Admin Stream Pinning & Control Strip)
+        if (filteredMatches.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "No Matches Found in Filter",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            color = TextSecondary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onAddMatchClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
+                    ) {
+                        Text("+ Add Custom Live Match", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(
+                    items = filteredMatches,
+                    key = { "adm_${it.sport.name}_${it.id}" }
+                ) { match ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color(0xFF111A2B))
+                            .border(1.dp, Color(0xFF233248), RoundedCornerShape(18.dp))
+                    ) {
+                        // Exact same MatchCard seen by users
+                        MatchCard(
+                            match = match,
+                            onClick = { onEditMatchClick(match) },
+                            onFavoriteToggle = { onEditMatchClick(match) },
+                            onStreamSelectClick = { onEditMatchClick(match) }
+                        )
+
+                        // Admin Control Bar attached to the bottom of the MatchCard
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF0D1522))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isSuccess) LiveGreen else LiveRed)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isSuccess) "STREAM ONLINE" else "STREAM OFFLINE / ERROR",
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSuccess) LiveGreen else LiveRed
-                                    )
-                                )
-                            }
-
-                            if (result.httpStatusCode > 0) {
-                                Text(
-                                    text = "HTTP ${result.httpStatusCode}",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Text(
-                            text = result.message,
-                            style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary)
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Column {
-                                Text("Latency", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary))
-                                Text("${result.latencyMs} ms", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = CyanAccent))
-                            }
-                            Column {
-                                Text("Content-Type", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary))
-                                Text(result.contentType, style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            Column {
-                                Text("HLS Format", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary))
-                                Text(if (result.isHlsStream) "Valid HLS" else "Unknown", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = if (result.isHlsStream) LiveGreen else GoldYellow))
-                            }
-                        }
-
-                        if (isSuccess) {
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Button(
-                                onClick = {
-                                    onTestPlayStream(
-                                        StreamSource(
-                                            name = "M3U8 Test Stream",
-                                            quality = "FHD",
-                                            url = result.url
-                                        )
-                                    )
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(containerColor = NavySurfaceVariant),
-                                shape = RoundedCornerShape(8.dp)
+                            // Stream Pin / Edit button
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = CyanAccent)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test Play Stream In Player", color = CyanAccent, fontWeight = FontWeight.Bold)
+                                Surface(
+                                    color = CyanAccent.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .border(1.dp, CyanAccent, RoundedCornerShape(8.dp))
+                                        .clickable { onEditMatchClick(match) }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.SettingsInputAntenna,
+                                            contentDescription = null,
+                                            tint = CyanAccent,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Pin/Edit Streams (${match.streams.size})",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = CyanAccent,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // Test Play Default Stream
+                                if (match.streams.isNotEmpty()) {
+                                    Surface(
+                                        color = LiveGreen.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .border(1.dp, LiveGreen, RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                val def = match.streams.find { it.isDefault } ?: match.streams.first()
+                                                onTestPlayStream(def)
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.PlayArrow,
+                                                contentDescription = "Test Play",
+                                                tint = LiveGreen,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "Play",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    color = LiveGreen,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 11.sp
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Status Quick Switch & Hide Match
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                val nextStatus = when (match.status) {
+                                    MatchStatus.UPCOMING -> MatchStatus.LIVE
+                                    MatchStatus.LIVE -> MatchStatus.FINISHED
+                                    else -> MatchStatus.LIVE
+                                }
+                                TextButton(
+                                    onClick = { onQuickStatusChange(match, nextStatus) },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Text(
+                                        text = "Set ${nextStatus.name}",
+                                        color = GoldYellow,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { onDeleteMatchClick(match.id) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.DeleteOutline,
+                                        contentDescription = "Hide Match",
+                                        tint = LiveRed,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -491,314 +1017,573 @@ fun M3U8StreamCheckerTab(
     }
 }
 
-// TAB 2: CHANNELS & MULTIPLE STREAMS MANAGER
+// =========================================================================================
+// TAB 2: ADMIN SPORTS CHANNELS SECTION (EXACT SAME CIRCULAR LOGO STYLE AS SportsChannelsScreen)
+// =========================================================================================
 @Composable
-fun ChannelsManagerTab(
+private fun AdminSportsChannelsSection(
     channels: List<SportsChannel>,
+    selectedCategory: String,
+    onCategorySelect: (String) -> Unit,
+    searchQuery: String,
     onAddChannelClick: () -> Unit,
-    onEditChannelClick: (SportsChannel) -> Unit = {},
-    onDeleteChannel: (String) -> Unit,
-    onTestPlayStream: (StreamSource) -> Unit
+    onEditChannelClick: (SportsChannel) -> Unit,
+    onToggleChannelEnabled: (SportsChannel) -> Unit,
+    onDeleteChannelClick: (String) -> Unit,
+    onTestPlayStream: (StreamSource) -> Unit,
+    onCleanDeadLinks: () -> Unit
 ) {
-    LazyColumn(
+    val distinctCategories = remember(channels) {
+        listOf("All") + channels.map { it.category }.filter { it.isNotBlank() }.distinct()
+    }
+
+    val filteredChannels = remember(channels, searchQuery, selectedCategory) {
+        channels.filter { ch ->
+            val matchesCat = selectedCategory.equals("All", ignoreCase = true) ||
+                ch.category.equals(selectedCategory, ignoreCase = true)
+            val matchesQuery = if (searchQuery.isBlank()) true else {
+                ch.name.contains(searchQuery, ignoreCase = true) ||
+                    ch.category.contains(searchQuery, ignoreCase = true) ||
+                    ch.logoText.contains(searchQuery, ignoreCase = true)
+            }
+            matchesCat && matchesQuery
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .background(Color(0xFF0B111E))
+            .padding(horizontal = 12.dp)
     ) {
-        item {
-            Button(
-                onClick = onAddChannelClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("admin_add_channel_btn"),
-                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Add Channel With Multiple Streams",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
+        // Category Filter Row matching SportsChannelsScreen
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            distinctCategories.forEach { cat ->
+                val isSelected = selectedCategory.equals(cat, ignoreCase = true)
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onCategorySelect(cat) },
+                    label = {
+                        Text(
+                            text = cat,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 11.sp
+                            )
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
+                        selectedLabelColor = CyanAccent,
+                        containerColor = NavySurface,
+                        labelColor = TextSecondary
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = isSelected,
+                        borderColor = if (isSelected) CyanAccent else NavyBorder
                     )
                 )
             }
         }
 
-        item {
-            Text(
-                text = "EXISTING CHANNELS (${channels.size})",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    letterSpacing = 1.sp
-                )
-            )
+        // Top Channel Admin Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = onAddChannelClick,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("+ Add TV Channel", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+
+            OutlinedButton(
+                onClick = onCleanDeadLinks,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, GoldYellow.copy(alpha = 0.7f)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Icon(Icons.Default.CleaningServices, contentDescription = null, tint = GoldYellow, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("Remove Dead Links", color = GoldYellow, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+            }
         }
 
-        items(channels, key = { it.id }) { ch ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(filteredChannels, key = { it.id }) { channel ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(
+                            1.dp,
+                            if (channel.isEnabled) NavyBorder else LiveRed.copy(alpha = 0.5f),
+                            RoundedCornerShape(14.dp)
+                        )
+                        .clickable { onEditChannelClick(channel) },
+                    colors = CardDefaults.cardColors(containerColor = NavySurface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            // Exact same Circular Channel Logo Badge from SportsChannelsScreen
+                            Box(
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                                    .border(1.5.dp, NavyBorder, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val logoUrl = channel.logoUrl.trim()
+                                if (logoUrl.startsWith("http://", true) || logoUrl.startsWith("https://", true)) {
+                                    AsyncImage(
+                                        model = logoUrl,
+                                        contentDescription = channel.name,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(6.dp)
+                                            .clip(CircleShape)
+                                    )
+                                } else {
+                                    val text = if (channel.logoText.isNotBlank()) channel.logoText else channel.name.take(4).uppercase()
+                                    Text(
+                                        text = text,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            color = Color(0xFF0F172A),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 11.sp
+                                        ),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = channel.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        color = CyanAccent.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = channel.category,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = CyanAccent,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "${channel.streams.size} servers • ${channel.streams.firstOrNull()?.url?.take(38) ?: "No stream"}...",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = TextSecondary,
+                                        fontSize = 11.sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (channel.streams.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        val def = channel.streams.find { it.isDefault } ?: channel.streams.first()
+                                        onTestPlayStream(def)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayCircleFilled, contentDescription = "Test Play", tint = LiveGreen, modifier = Modifier.size(22.dp))
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { onEditChannelClick(channel) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit Channel", tint = CyanAccent, modifier = Modifier.size(18.dp))
+                            }
+
+                            Switch(
+                                checked = channel.isEnabled,
+                                onCheckedChange = { onToggleChannelEnabled(channel) },
+                                modifier = Modifier.padding(horizontal = 2.dp),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = CyanAccent
+                                )
+                            )
+
+                            IconButton(
+                                onClick = { onDeleteChannelClick(channel.id) },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete Channel", tint = LiveRed, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================================
+// TAB 3: BULK M3U / M3U8 SMART IMPORTER & LIVE HEALTH SCANNER (MODULE 1)
+// =========================================================================================
+@Composable
+private fun AdminBulkM3u8ScannerSection(
+    repository: SportsStreamRepository,
+    onTestPlayStream: (StreamSource) -> Unit,
+    onShowMessage: (String) -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var bulkM3uInput by remember {
+        mutableStateOf(
+            """
+            T Sports: https://robitv.com/rn/http://45.117.61.162/01_Tsports_HD/tracks-v1a1/mono.m3u8
+            A Sports: https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/tracks-v1a1/mono.ts.m3u8
+            PTV Sports: https://flussonic.defineatoz.com/PTV/index.m3u8
+            Star Sports 2: https://tvsen7.aynaott.com/ssport2hd/index.m3u8
+            Willow TV: https://tvsen5.aynaott.com/willowhd/index.m3u8
+            Sony Sports 1: https://drk6xq0vhn.gpcdn.net/live/ten_1_hd_720/index.m3u8
+            Sony Sports 2: https://drk6xq0vhn.gpcdn.net/live/ten_2_hd_720/index.m3u8
+            Sony Sports 5: https://drk6xq0vhn.gpcdn.net/live/ten_5_hd_720/index.m3u8
+            #EXTINF:-1 group-title="Sports",TyC Sports
+            https://m.mxonlive.xyz/nexusstream/tycsport.m3u8
+            #EXTINF:-1 group-title="Sports",Telemundo Deportes
+            https://tda-nnaa-drct-pa6dy.fast.nbcuni.com/live/master_2.m3u8
+            #EXTINF:-1 group-title="Sports",BeIN Sports Extra
+            https://bein-esp-xumo.amagi.tv/playlistR1080p.m3u8
+            """.trimIndent()
+        )
+    }
+
+    var isScanning by remember { mutableStateOf(false) }
+    var isApplying by remember { mutableStateOf(false) }
+    var scannedItems by remember { mutableStateOf<List<BulkM3uScanItem>>(emptyList()) }
+
+    val activeCount = remember(scannedItems) { scannedItems.count { it.checkResult?.isOnline == true } }
+    val deadCount = remember(scannedItems) { scannedItems.count { it.checkResult?.isOnline == false } }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B111E))
+            .padding(horizontal = 12.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, NavyBorder, RoundedCornerShape(12.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
+                    .border(1.dp, CyanAccent.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "⚡ Bulk M3U / M3U8 Auto-Detector",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                            )
+                            Text(
+                                text = "একসাথে অনেকগুলো #EXTINF বা .m3u8 লিংক পেস্ট করুন। কোনটা Active তা অটো চেক করে নির্দিষ্ট খেলা ও চ্যানেলে যুক্ত হয়ে সব ইউজারের ফোনে আপডেট যাবে।",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = TextSecondary,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+                        TextButton(onClick = { bulkM3uInput = "" }) {
+                            Text("Clear", color = LiveRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = bulkM3uInput,
+                        onValueChange = { bulkM3uInput = it },
+                        label = { Text("Paste #EXTINF / Channel: https://...m3u8 / Raw M3U URL") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                            .testTag("bulk_m3u8_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = CyanAccent,
+                            unfocusedBorderColor = NavyBorder,
+                            focusedContainerColor = Color(0xFF0E1624),
+                            unfocusedContainerColor = Color(0xFF0E1624)
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (bulkM3uInput.isBlank()) return@Button
+                                coroutineScope.launch {
+                                    isScanning = true
+                                    scannedItems = repository.scanBulkM3uText(bulkM3uInput)
+                                    isScanning = false
+                                    val onCount = scannedItems.count { it.checkResult?.isOnline == true }
+                                    onShowMessage("স্ক্যান সম্পন্ন: ${scannedItems.size}টির মধ্যে $onCount টি Active (🟢 LIVE) পাওয়া গেছে!")
+                                }
+                            },
+                            enabled = !isScanning && bulkM3uInput.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (isScanning) {
+                                CircularProgressIndicator(color = Color.Black, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Scanning...", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Radar, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("1. Scan Active Links", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isApplying = true
+                                    val itemsToApply = if (scannedItems.isNotEmpty()) {
+                                        scannedItems
+                                    } else {
+                                        repository.scanBulkM3uText(bulkM3uInput)
+                                    }
+                                    scannedItems = itemsToApply
+                                    val addedCount = repository.applyScannedM3uItems(itemsToApply, onlyActive = true)
+                                    isApplying = false
+                                    onShowMessage("সফলভাবে $addedCount টি সচল স্ট্রিম সংশ্লিষ্ট ম্যাচ ও চ্যানেলে যুক্ত হয়ে সব ইউজারের জন্য আপডেট হয়েছে!")
+                                }
+                            },
+                            enabled = !isApplying && bulkM3uInput.isNotBlank(),
+                            modifier = Modifier.weight(1.15f),
+                            colors = ButtonDefaults.buttonColors(containerColor = LiveGreen),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (isApplying) {
+                                CircularProgressIndicator(color = Color.Black, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Syncing...", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.CloudDone, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("2. Auto-Assign Active & Sync", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (scannedItems.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "SCAN RESULTS: 🟢 $activeCount ACTIVE • 🔴 $deadCount OFFLINE",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = CyanAccent,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.sp
+                        )
+                    )
+                    if (deadCount > 0) {
+                        TextButton(
+                            onClick = {
+                                scannedItems = scannedItems.filter { it.checkResult?.isOnline == true }
+                            }
+                        ) {
+                            Text("Hide Offline ($deadCount)", color = LiveRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            items(scannedItems, key = { it.url }) { item ->
+                val isOnline = item.checkResult?.isOnline == true
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            1.dp,
+                            if (isOnline) LiveGreen.copy(alpha = 0.55f) else LiveRed.copy(alpha = 0.4f),
+                            RoundedCornerShape(14.dp)
+                        ),
+                    colors = CardDefaults.cardColors(containerColor = NavySurface),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
+                                    .size(44.dp)
                                     .clip(CircleShape)
-                                    .background(Color.White),
+                                    .background(Color.White)
+                                    .border(1.5.dp, if (isOnline) LiveGreen else LiveRed, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = if (ch.logoText.isNotBlank()) ch.logoText else ch.name.take(3),
+                                    text = item.name.take(4).uppercase(Locale.US),
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        color = Color.Black,
-                                        fontWeight = FontWeight.Bold
+                                        color = Color(0xFF0F172A),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 10.sp
                                     )
                                 )
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text(
-                                    text = ch.name,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary
-                                    )
-                                )
-                                Text(
-                                    text = "${ch.category} • ${ch.streams.size} Stream Servers",
-                                    style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
-                                )
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { onEditChannelClick(ch) }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = CyanAccent)
-                            }
-                            IconButton(onClick = { onDeleteChannel(ch.id) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = LiveRed)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Streams list
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ch.streams.forEach { s ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(NavySurfaceVariant)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    QualityBadge(quality = s.quality)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = s.name,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = TextPrimary,
-                                            fontWeight = FontWeight.Medium
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { onTestPlayStream(s) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = "Play",
-                                        tint = CyanAccent,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// TAB 3: MATCHES & MULTIPLE STREAMS MANAGER
-@Composable
-fun MatchesManagerTab(
-    matches: List<LiveMatch>,
-    onAddMatchClick: () -> Unit,
-    onEditMatchClick: (LiveMatch) -> Unit,
-    onDeleteMatch: (String) -> Unit,
-    onToggleStatus: (LiveMatch) -> Unit,
-    onTestPlayStream: (StreamSource) -> Unit
-) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item {
-            Button(
-                onClick = onAddMatchClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("admin_add_match_btn"),
-                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, tint = Color.Black)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Add Live Match With Multi-Streams",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
-                    )
-                )
-            }
-        }
-
-        item {
-            Text(
-                text = "ACTIVE MATCHES (${matches.size})",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    letterSpacing = 1.sp
-                )
-            )
-        }
-
-        items(matches, key = { it.id }) { m ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, NavyBorder, RoundedCornerShape(12.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = m.tournament,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = TextSecondary,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                maxLines = 1
-                            )
-                            Text(
-                                text = "${m.team1Name} vs ${m.team2Name}",
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Status Toggle
-                            AssistChip(
-                                onClick = { onToggleStatus(m) },
-                                label = {
-                                    Text(
-                                        text = m.status.name,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 10.sp,
-                                            color = if (m.status == MatchStatus.LIVE) LiveRed else CyanAccent
-                                        )
-                                    )
-                                }
-                            )
-
-                            IconButton(onClick = { onDeleteMatch(m.id) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = LiveRed)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Score / Time: ${m.timeOrScore} • ${m.streams.size} Multiple Streams configured",
-                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        m.streams.forEach { s ->
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(NavySurfaceVariant)
-                                    .clickable { onTestPlayStream(s) }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    QualityBadge(quality = s.quality)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(s.name, color = TextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = item.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        color = if (isOnline) LiveGreen.copy(alpha = 0.2f) else LiveRed.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isOnline) "🟢 LIVE (${item.checkResult?.latencyMs ?: 0}ms)" else "🔴 OFFLINE",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = if (isOnline) LiveGreen else LiveRed,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 9.sp
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
                                 }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = item.autoMatchedTarget,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = CyanAccent,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = item.url,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = TextSecondary,
+                                        fontSize = 10.sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Edit streams and match action button
-                    OutlinedButton(
-                        onClick = { onEditMatchClick(m) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(38.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(CyanAccent)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.Edit, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Edit Streams & Channels (${m.streams.size} Available)",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        IconButton(
+                            onClick = {
+                                onTestPlayStream(
+                                    StreamSource(
+                                        name = item.name,
+                                        quality = item.quality,
+                                        url = item.url
+                                    )
+                                )
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.PlayCircleFilled,
+                                contentDescription = "Test Play",
+                                tint = if (isOnline) LiveGreen else GoldYellow,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -806,1158 +1591,556 @@ fun MatchesManagerTab(
     }
 }
 
-// TAB 4: APP CONTROL & ANNOUNCEMENT SETTINGS
+// =========================================================================================
+// TAB 4: APP CONTROL, REMOTE AUTO-SYNC, LEAGUES, TELEGRAM, NOTICE & SECURITY (MODULES 3,4,5,6)
+// =========================================================================================
 @Composable
-fun AppSettingsTab(
+private fun AdminAppControlSection(
     config: AppConfig,
-    cloudSyncStatus: String = "Connected to Real-Time Cloud Server",
-    providerDiagnostics: List<ProviderSyncDiagnostics> = emptyList(),
-    unmappedNotices: List<UnmappedAssociationNotice> = emptyList(),
-    onDismissUnmappedNotice: (String) -> Unit = {},
-    onTriggerProviderSync: (suspend () -> Unit)? = null,
-    onUpdateConfig: (AppConfig) -> Unit,
-    onResetDefaults: () -> Unit,
-    onSyncRemote: suspend (String) -> Result<Int>,
-    onPushAllToCloud: (suspend () -> Result<Int>)? = null,
-    onExportDataJson: (() -> String)? = null
+    currentUserEmail: String?,
+    cloudSyncStatus: String,
+    providerDiagnostics: List<ProviderSyncDiagnostics>,
+    onGoogleSignIn: () -> Unit,
+    onSaveConfig: (AppConfig) -> Unit,
+    onPushAllCloud: () -> Unit,
+    onOpenLeagueModal: () -> Unit,
+    onSyncRemoteFeedNow: () -> Unit,
+    onResetDefaults: () -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var announcement by remember(config.announcement) { mutableStateOf(config.announcement) }
-    var telegramLink by remember(config.telegramLink) { mutableStateOf(config.telegramLink) }
-    var adminPin by remember(config.adminPin) { mutableStateOf(config.adminPin) }
     var appTitle by remember(config.appTitle) { mutableStateOf(config.appTitle) }
+    var telegramLink by remember(config.telegramLink) { mutableStateOf(config.telegramLink) }
+    var announcement by remember(config.announcement) { mutableStateOf(config.announcement) }
     var remoteFeedUrl by remember(config.remoteFeedUrl) { mutableStateOf(config.remoteFeedUrl) }
-    var isSyncingRemote by remember { mutableStateOf(false) }
-    var syncStatusMessage by remember { mutableStateOf<String?>(null) }
-    var isPushingCloud by remember { mutableStateOf(false) }
-    var cloudPushMessage by remember { mutableStateOf<String?>(null) }
-    var showResetConfirm by remember { mutableStateOf(false) }
-    var autoSyncOnLaunch by remember(config.autoSyncOnLaunch) { mutableStateOf(config.autoSyncOnLaunch) }
-    var showSampleJsonModal by remember { mutableStateOf(false) }
-    var showExportJsonModal by remember { mutableStateOf(false) }
-    var exportedJsonText by remember { mutableStateOf("") }
-    var exportCopiedToast by remember { mutableStateOf(false) }
-    val clipboardManager = LocalClipboardManager.current
-    var copiedToast by remember { mutableStateOf(false) }
-    var isSyncingProviders by remember { mutableStateOf(false) }
-    var showFootballLeagueModal by remember { mutableStateOf(false) }
-
-    val dhakaTimeFormatter = remember {
-        SimpleDateFormat("dd MMM, hh:mm:ss a", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("Asia/Dhaka")
-        }
+    var adminPin by remember(config.adminPin) { mutableStateOf(config.adminPin) }
+    var refreshIntervalText by remember(config.autoRefreshIntervalSec) {
+        mutableStateOf(config.autoRefreshIntervalSec.toString())
     }
+    var footballEnabled by remember(config.footballSyncEnabled) { mutableStateOf(config.footballSyncEnabled) }
+    var cricketEnabled by remember(config.cricketSyncEnabled) { mutableStateOf(config.cricketSyncEnabled) }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .background(Color(0xFF0B111E))
+            .padding(horizontal = 14.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 96.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // UNMAPPED FAVOURITE / STREAM ASSOCIATION SAFE REMAP NOTICES
-        if (unmappedNotices.isNotEmpty()) {
-            item {
-                Card(
+        // Exact same App Logo Header as MenuScreen
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.2.dp, GoldYellow, RoundedCornerShape(14.dp)),
-                    colors = CardDefaults.cardColors(containerColor = NavySurface)
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.White)
+                        .border(2.dp, Color(0xFFFF5722), RoundedCornerShape(18.dp)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.WarningAmber, contentDescription = null, tint = GoldYellow, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Unmapped Match Associations (${unmappedNotices.size})",
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = GoldYellow
-                                )
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "নিচের ম্যাচগুলোর provider match ID পরিবর্তিত হয়েছে বা আজকের ৩-দিনের উইন্ডোতে এখনও মেলানো যায়নি। ডাটা মুছে ফেলা হয়নি; ম্যাচ ফিডে এলে স্বয়ংক্রিয়ভাবে রিম্যাপ হবে:",
-                            style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        unmappedNotices.forEach { notice ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(NavyDark)
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "${notice.sport.displayName} • ${notice.team1Name} vs ${notice.team2Name}",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            color = TextPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                    Text(
-                                        text = "Old ID: ${notice.previousMatchId} • Streams: ${notice.preservedStreams.size} • Fav: ${if (notice.hadFavorite) "Yes" else "No"}",
-                                        style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontSize = 10.sp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { onDismissUnmappedNotice(notice.previousMatchId) },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(Icons.Default.Close, contentDescription = "Acknowledge", tint = TextSecondary, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // PROVIDER SYNC & LEAGUE CONTROL CARD (ESPN FOOTBALL & CREX CRICKET)
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.2.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Sync, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(22.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Provider Feed Control (ESPN & CREX)",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Asia/Dhaka টাইমজোন অনুযায়ী শুধুমাত্র গতকাল, আজ ও আগামীকালের সিনিয়র আন্তর্জাতিক ও প্রফেশনাল ক্লাব ম্যাচ সিঙ্ক করা হচ্ছে।",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Football (ESPN) Sync Toggle
-                    Row(
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_app_logo),
+                        contentDescription = "Sports Live Logo",
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NavyDark)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Football Provider Sync (ESPN Scoreboard)",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
-                            )
-                            val espnDiag = providerDiagnostics.find { it.providerName.contains("ESPN", ignoreCase = true) }
-                            val lastSyncStr = espnDiag?.lastSyncEpochMs?.takeIf { it > 0 }?.let { dhakaTimeFormatter.format(Date(it)) } ?: "Never"
-                            Text(
-                                text = "Status: ${espnDiag?.statusText ?: "IDLE"} • Matches: ${espnDiag?.activeMatchCount ?: 0} • Last: $lastSyncStr",
-                                style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontSize = 10.sp)
-                            )
-                            espnDiag?.lastError?.takeIf { it.isNotBlank() }?.let { err ->
-                                Text(text = "Error: $err", style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontSize = 10.sp))
-                            }
-                        }
-                        Switch(
-                            checked = config.footballSyncEnabled,
-                            onCheckedChange = { enabled ->
-                                onUpdateConfig(config.copy(footballSyncEnabled = enabled))
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = CyanAccent)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Cricket (CREX) Sync Toggle
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NavyDark)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Cricket Provider Sync (CREX International)",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
-                            )
-                            val crexDiag = providerDiagnostics.find { it.providerName.contains("CREX", ignoreCase = true) }
-                            val lastSyncStr = crexDiag?.lastSyncEpochMs?.takeIf { it > 0 }?.let { dhakaTimeFormatter.format(Date(it)) } ?: "Never"
-                            Text(
-                                text = "Status: ${crexDiag?.statusText ?: "IDLE"} • Matches: ${crexDiag?.activeMatchCount ?: 0} • Last: $lastSyncStr",
-                                style = MaterialTheme.typography.labelSmall.copy(color = GoldYellow, fontSize = 10.sp)
-                            )
-                            crexDiag?.lastError?.takeIf { it.isNotBlank() }?.let { err ->
-                                Text(text = "Error: $err", style = MaterialTheme.typography.labelSmall.copy(color = LiveRed, fontSize = 10.sp))
-                            }
-                        }
-                        Switch(
-                            checked = config.cricketSyncEnabled,
-                            onCheckedChange = { enabled ->
-                                onUpdateConfig(config.copy(cricketSyncEnabled = enabled))
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = GoldYellow)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Auto-refresh interval selector
-                    Text(
-                        text = "AUTO-REFRESH INTERVAL (LIVE MATCHES)",
-                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            .fillMaxSize()
+                            .padding(4.dp)
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(15, 25, 30, 60).forEach { sec ->
-                            val selected = config.autoRefreshIntervalSec == sec
-                            FilterChip(
-                                selected = selected,
-                                onClick = { onUpdateConfig(config.copy(autoRefreshIntervalSec = sec)) },
-                                label = { Text("${sec}s", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = CyanAccent,
-                                    selectedLabelColor = Color.Black,
-                                    containerColor = NavyDark,
-                                    labelColor = TextSecondary
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showFootballLeagueModal = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(CyanAccent)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
-                        ) {
-                            Icon(Icons.Default.SportsSoccer, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Leagues (${config.enabledFootballLeagues.size}/${EspnFootballService.VERIFIED_COMPETITIONS.size})",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Button(
-                            onClick = {
-                                isSyncingProviders = true
-                                coroutineScope.launch {
-                                    onTriggerProviderSync?.invoke()
-                                    isSyncingProviders = false
-                                }
-                            },
-                            enabled = !isSyncingProviders,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            if (isSyncingProviders) {
-                                CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Syncing...", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Manual Sync Now", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
                 }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "${config.appTitle} • Admin Control",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 18.sp
+                    )
+                )
+                Text(
+                    text = cloudSyncStatus,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = CyanAccent,
+                        fontSize = 11.sp
+                    )
+                )
             }
         }
 
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.2.dp, LiveGreen.copy(alpha = 0.6f), RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.CloudDone,
-                                contentDescription = null,
-                                tint = LiveGreen,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Real-Time Cloud Server (Firestore)",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "অ্যাডমিন প্যানেল বা ওয়েব কনসোল (Firebase Console -> cloud_items) থেকে যেকোনো ম্যাচ, চ্যানেল বা স্ট্রিম পরিবর্তন করলে সকল ইউজারের অ্যাপে অটোমেটিক রিয়েল-টাইম আপডেট চলে যাবে।",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "Status: $cloudSyncStatus",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            color = LiveGreen,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Button(
-                        onClick = {
-                            isPushingCloud = true
-                            cloudPushMessage = null
-                            coroutineScope.launch {
-                                val res = onPushAllToCloud?.invoke()
-                                isPushingCloud = false
-                                cloudPushMessage = res?.fold(
-                                    onSuccess = { "✓ Successfully published $it items to Cloud Server for all users!" },
-                                    onFailure = { "Cloud sync error: ${it.localizedMessage}" }
-                                )
-                            }
-                        },
-                        enabled = !isPushingCloud,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("admin_push_cloud_server_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = LiveGreen),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        if (isPushingCloud) {
-                            CircularProgressIndicator(
-                                color = Color.Black,
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Publishing to Cloud Server...", color = Color.Black, fontWeight = FontWeight.Bold)
-                        } else {
-                            Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.Black)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Push All Matches & Channels to Cloud Server", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    cloudPushMessage?.let { msg ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = msg,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = if (msg.startsWith("✓")) LiveGreen else LiveRed,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "App Control & Announcement Broadcast",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = appTitle,
-                        onValueChange = { appTitle = it },
-                        label = { Text("App Title") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedTextField(
-                        value = announcement,
-                        onValueChange = { announcement = it },
-                        label = { Text("Broadcast Banner Message") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        ),
-                        maxLines = 3
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedTextField(
-                        value = telegramLink,
-                        onValueChange = { telegramLink = it },
-                        label = { Text("Telegram Community URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedTextField(
-                        value = adminPin,
-                        onValueChange = { adminPin = it },
-                        label = { Text("Admin Passcode PIN") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Button(
-                        onClick = {
-                            onUpdateConfig(
-                                config.copy(
-                                    appTitle = appTitle,
-                                    announcement = announcement,
-                                    telegramLink = telegramLink,
-                                    adminPin = adminPin,
-                                    remoteFeedUrl = remoteFeedUrl,
-                                    autoSyncOnLaunch = autoSyncOnLaunch
-                                )
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Save Settings", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        // CARD 2: RAW JSON / PASTEBIN LIVE UPDATE CONTROL
+        // Module 6: Real-Time Cloud Sync & Admin Identity Card
         item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(1.dp, CyanAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.CloudSync,
-                            contentDescription = null,
-                            tint = CyanAccent,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Online Feed (Pastebin / Raw JSON)",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "APK রি-বিল্ড না করেই প্রতিদিনের নতুন ম্যাচ ও চ্যানেল অনলাইন (Pastebin বা GitHub Raw) থেকে রিয়েল-টাইমে আপডেট করুন।",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = remoteFeedUrl,
-                        onValueChange = { remoteFeedUrl = it },
-                        label = { Text("Pastebin or Raw JSON URL") },
-                        placeholder = { Text("https://pastebin.com/raw/xxxx or raw.githubusercontent.com/...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavyDark,
-                            unfocusedContainerColor = NavyDark
-                        ),
-                        maxLines = 2
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "টিপস: pastebin.com/xxxx লিঙ্ক দিলেও অ্যাপ নিজে থেকে /raw/ লিঙ্কে রূপান্তর করে নিবে।",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = GoldYellow,
-                            fontSize = 11.sp
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Auto-sync toggle
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NavyDark)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Auto-Sync on App Startup",
+                                text = "☁️ Real-Time Cloud Broadcast",
                                 style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
                                 )
                             )
                             Text(
-                                text = "ইউজার অ্যাপ ওপেন করলেই স্বয়ংক্রিয়ভাবে অনলাইন ফিড লোড হবে",
-                                style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
+                                text = if (currentUserEmail != null) {
+                                    "Signed in as: $currentUserEmail (All changes update users live)"
+                                } else {
+                                    "Sign in with Google (masfitanha@gmail.com) so every change updates all users instantly"
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (currentUserEmail != null) LiveGreen else GoldYellow,
+                                    fontSize = 11.sp
+                                )
                             )
                         }
-                        Switch(
-                            checked = autoSyncOnLaunch,
-                            onCheckedChange = {
-                                autoSyncOnLaunch = it
-                                onUpdateConfig(config.copy(autoSyncOnLaunch = it))
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.Black,
-                                checkedTrackColor = CyanAccent
-                            )
-                        )
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (currentUserEmail == null) {
+                            Button(
+                                onClick = onGoogleSignIn,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sign in with Google", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+
                         Button(
-                            onClick = {
-                                isSyncingRemote = true
-                                syncStatusMessage = null
-                                coroutineScope.launch {
-                                    val result = onSyncRemote(remoteFeedUrl)
-                                    isSyncingRemote = false
-                                    syncStatusMessage = result.fold(
-                                        onSuccess = { "Synced $it items from remote feed successfully!" },
-                                        onFailure = { "Sync failed: ${it.localizedMessage}" }
-                                    )
-                                }
-                            },
-                            enabled = !isSyncingRemote && remoteFeedUrl.isNotBlank(),
+                            onClick = onPushAllCloud,
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            if (isSyncingRemote) {
-                                CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Sync Now", color = Color.Black, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                exportedJsonText = onExportDataJson?.invoke() ?: "{}"
-                                exportCopiedToast = false
-                                showExportJsonModal = true
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(GoldYellow)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldYellow)
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = null, tint = GoldYellow, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Export JSON", fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedButton(
-                        onClick = { showSampleJsonModal = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(CyanAccent)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
-                    ) {
-                        Icon(Icons.Default.Code, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("View Sample JSON Template", fontWeight = FontWeight.SemiBold)
-                    }
-
-                    syncStatusMessage?.let { msg ->
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = NavyDark),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = msg,
-                                modifier = Modifier.padding(10.dp),
-                                color = if (msg.startsWith("Synced")) LiveGreen else LiveRed,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Push All Updates to Users", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
             }
         }
 
+        // Module 4: League & Sport Visibility Manager
         item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavySurface)
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Reset & Restore Feeds",
-                        style = MaterialTheme.typography.titleMedium.copy(
+                        text = "⚽🏏 Sport & League Visibility Manager",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            color = LiveRed
+                            fontSize = 14.sp
                         )
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Restore default sports matches, channels, and tested stream servers.",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = { showResetConfirm = true },
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LiveRed),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(LiveRed))
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Reset to Default Stream Feeds")
+                        Text("Cricket Live & Upcoming Sync (CREX)", color = TextPrimary, fontSize = 13.sp)
+                        Switch(
+                            checked = cricketEnabled,
+                            onCheckedChange = {
+                                cricketEnabled = it
+                                onSaveConfig(config.copy(cricketSyncEnabled = it))
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = CyanAccent)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Football Live & Upcoming Sync (ESPN)", color = TextPrimary, fontSize = 13.sp)
+                        Switch(
+                            checked = footballEnabled,
+                            onCheckedChange = {
+                                footballEnabled = it
+                                onSaveConfig(config.copy(footballSyncEnabled = it))
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = CyanAccent)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedButton(
+                        onClick = onOpenLeagueModal,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent)
+                    ) {
+                        Icon(Icons.Default.Checklist, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Configure Football Leagues (${config.enabledFootballLeagues.size} Enabled)",
+                            color = CyanAccent,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Module 5: App Title, Live Notice Banner & Telegram Link
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "📢 App Title, Telegram & Live Notice",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = appTitle,
+                        onValueChange = { appTitle = it },
+                        label = { Text("App Header Title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = telegramLink,
+                        onValueChange = { telegramLink = it },
+                        label = { Text("Telegram Channel Link (Top Bar Button)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = announcement,
+                        onValueChange = { announcement = it },
+                        label = { Text("Live Notice / Breaking Announcement Banner") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // Module 3 & 6: Remote Auto-Sync Playlist URL & Admin Security PIN
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "🔗 Remote Auto-Sync M3U URL & Admin PIN",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = remoteFeedUrl,
+                        onValueChange = { remoteFeedUrl = it },
+                        label = { Text("Remote Auto-Sync M3U / Feed URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = refreshIntervalText,
+                            onValueChange = { refreshIntervalText = it },
+                            label = { Text("Auto Refresh (sec)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = adminPin,
+                            onValueChange = { adminPin = it },
+                            label = { Text("Admin PIN Lock") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val interval = refreshIntervalText.toIntOrNull()?.coerceIn(15, 600) ?: 30
+                                onSaveConfig(
+                                    config.copy(
+                                        appTitle = appTitle.ifBlank { "Sports Live" },
+                                        telegramLink = telegramLink.trim(),
+                                        announcement = announcement.trim(),
+                                        remoteFeedUrl = remoteFeedUrl.trim(),
+                                        adminPin = adminPin.ifBlank { "1234" },
+                                        autoRefreshIntervalSec = interval,
+                                        footballSyncEnabled = footballEnabled,
+                                        cricketSyncEnabled = cricketEnabled
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1.3f),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save & Update All Users", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = onSyncRemoteFeedNow,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Sync Feed Now", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Provider Diagnostics Snapshot
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, NavyBorder, RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = NavySurface),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📡 Live Feed Diagnostics",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        )
+                        TextButton(onClick = onResetDefaults) {
+                            Text("Reset Defaults", color = LiveRed, fontSize = 11.sp)
+                        }
+                    }
+                    providerDiagnostics.forEach { diag ->
+                        Text(
+                            text = "• ${diag.providerName}: ${diag.statusText}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        )
                     }
                 }
             }
         }
     }
+}
 
-    if (showResetConfirm) {
-        AlertDialog(
-            onDismissRequest = { showResetConfirm = false },
-            title = { Text("Reset to Defaults?") },
-            text = { Text("This will reload all preloaded sports matches, test streams, and channels.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onResetDefaults()
-                        showResetConfirm = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = LiveRed)
-                ) {
-                    Text("Reset")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showResetConfirm = false }) {
-                    Text("Cancel", color = TextSecondary)
-                }
-            },
-            containerColor = NavyDark
+// =========================================================================================
+// MODAL DIALOG: FOOTBALL LEAGUE VISIBILITY MANAGER (WITH PRIORITY LEAGUES AT TOP)
+// =========================================================================================
+@Composable
+private fun LeagueVisibilityDialog(
+    config: AppConfig,
+    onDismiss: () -> Unit,
+    onSaveConfig: (AppConfig) -> Unit
+) {
+    var enabledSet by remember(config.enabledFootballLeagues) {
+        mutableStateOf(config.enabledFootballLeagues)
+    }
+
+    val prioritySlugs = remember {
+        listOf(
+            "esp.1" to "FOOTBALL | LALIGA",
+            "esp.2" to "FOOTBALL | LALIGA 2",
+            "arg.1" to "FOOTBALL | LIGA PROFESIONAL DE FÚTBOL",
+            "mex.1" to "FOOTBALL | LIGA MX, APERTURA",
+            "por.1" to "FOOTBALL | LIGA PORTUGAL BETCLIC",
+            "ned.1" to "FOOTBALL | VRIENDENLOTERIJ EREDIVISIE",
+            "eng.1" to "FOOTBALL | ENGLISH PREMIER LEAGUE",
+            "uefa.champions" to "FOOTBALL | UEFA CHAMPIONS LEAGUE",
+            "ita.1" to "FOOTBALL | ITALIAN SERIE A",
+            "ger.1" to "FOOTBALL | GERMAN BUNDESLIGA",
+            "fra.1" to "FOOTBALL | FRENCH LIGUE 1",
+            "bra.1" to "FOOTBALL | BRAZILIAN SERIE A",
+            "ksa.1" to "FOOTBALL | SAUDI PRO LEAGUE",
+            "usa.1" to "FOOTBALL | MLS"
         )
     }
 
-    if (showSampleJsonModal) {
-        val sampleJson = """
-{
-  "announcement": "Welcome to Football Live TV! Enjoy today's high-voltage matches in Ultra HD.",
-  "telegram": "https://t.me/sports_live_streams",
-  "matches": [
-    {
-      "tournament": "UEFA CHAMPIONS LEAGUE",
-      "sport": "FOOTBALL",
-      "team1": "Real Madrid",
-      "team2": "Manchester City",
-      "status": "LIVE",
-      "score": "2 - 1",
-      "time": "LIVE 74'",
-      "streams": [
-        {
-          "name": "Server 1 - Willow HD",
-          "url": "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
-          "quality": "1080p FHD"
-        },
-        {
-          "name": "Server 2 - Sky Sports",
-          "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-          "quality": "720p HD"
-        }
-      ]
-    },
-    {
-      "tournament": "ICC CHAMPIONS TROPHY",
-      "sport": "CRICKET",
-      "team1": "Pakistan",
-      "team2": "India",
-      "status": "LIVE",
-      "score": "PAK 214/4 (38.2 ov)",
-      "time": "LIVE",
-      "streams": [
-        {
-          "name": "Server 1 - PTV Sports Live",
-          "url": "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
-          "quality": "1080p FHD"
-        }
-      ]
-    }
-  ],
-  "channels": [
-    {
-      "name": "T Sports HD",
-      "category": "Live Sports",
-      "url": "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8"
-    },
-    {
-      "name": "Sony Sports Ten 1",
-      "category": "Cricket & Football",
-      "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-    }
-  ]
-}
-""".trimIndent()
-
-        Dialog(onDismissRequest = { showSampleJsonModal = false }) {
-            Card(
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 580.dp)
+                .border(1.dp, CyanAccent, RoundedCornerShape(20.dp)),
+            colors = CardDefaults.cardColors(containerColor = NavyDark),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.85f)
-                    .padding(vertical = 12.dp)
-                    .border(1.dp, CyanAccent, RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavyDark),
-                shape = RoundedCornerShape(16.dp)
+                    .padding(16.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Code, contentDescription = null, tint = CyanAccent)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Pastebin JSON Template",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                        }
-                        IconButton(onClick = { showSampleJsonModal = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        "এই JSON কপি করে pastebin.com এ পেস্ট করে Create Paste করুন, তারপর লিঙ্কটি অ্যাপে দিন:",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
+                Text(
+                    text = "Football League Visibility",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
                     )
+                )
+                Text(
+                    text = "যেই লিগগুলো অন রাখবেন শুধুমাত্র সেগুলোর লাইভ ও আপকামিং ম্যাচ হোমপেজে দেখাবে",
+                    style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp)
+                )
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NavySurface)
-                            .padding(10.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = sampleJson,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = GoldYellow,
-                                fontSize = 11.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (copiedToast) {
-                        Text(
-                            "✓ JSON copied to clipboard! Paste it on Pastebin.com",
-                            color = LiveGreen,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(sampleJson))
-                                copiedToast = true
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Copy JSON", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = {
-                                remoteFeedUrl = "https://raw.githubusercontent.com/freefirejafor-wq/Upder/main/matches.json"
-                                onUpdateConfig(config.copy(remoteFeedUrl = remoteFeedUrl))
-                                showSampleJsonModal = false
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = NavySurfaceVariant),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Use Demo URL", color = CyanAccent, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showExportJsonModal) {
-        Dialog(onDismissRequest = { showExportJsonModal = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.85f),
-                colors = CardDefaults.cardColors(containerColor = NavyDark),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, GoldYellow)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Share, contentDescription = null, tint = GoldYellow)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Live Data JSON Export",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                        }
-                        IconButton(onClick = { showExportJsonModal = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        "১ ক্লিকে পুরো JSON কপি করুন এবং আপনার Pastebin বা GitHub-এ পেস্ট করে সেভ করুন। এতে সাথে সাথে পৃথিবীর সব ইউজারের অ্যাপ লাইভ আপডেট পেয়ে যাবে!",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NavySurface)
-                            .padding(10.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = exportedJsonText,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = GoldYellow,
-                                fontSize = 11.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (exportCopiedToast) {
-                        Text(
-                            "✓ JSON কপি করা হয়েছে! Pastebin.com বা GitHub এ গিয়ে পেস্ট করে সেভ করুন।",
-                            color = LiveGreen,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(exportedJsonText))
-                            exportCopiedToast = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = GoldYellow),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Copy Full JSON to Clipboard", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    }
-
-    if (showFootballLeagueModal) {
-        Dialog(onDismissRequest = { showFootballLeagueModal = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.88f)
-                    .border(1.dp, CyanAccent, RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = NavyDark),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "ESPN Football Competitions",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                            )
-                            Text(
-                                text = "Select which senior international & club competitions to sync",
-                                style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp)
-                            )
-                        }
-                        IconButton(onClick = { showFootballLeagueModal = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                onUpdateConfig(
-                                    config.copy(
-                                        enabledFootballLeagues = EspnFootballService.VERIFIED_COMPETITIONS.map { it.leagueId }.toSet()
-                                    )
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Enable All (${EspnFootballService.VERIFIED_COMPETITIONS.size})", color = CyanAccent, fontSize = 11.sp)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                onUpdateConfig(
-                                    config.copy(
-                                        enabledFootballLeagues = setOf(
-                                            "uefa.champions",
-                                            "fifa.worldq.uefa",
-                                            "fifa.worldq.conmebol",
-                                            "uefa.nations",
-                                            "eng.1",
-                                            "esp.1",
-                                            "ita.1",
-                                            "ger.1",
-                                            "fra.1"
-                                        )
-                                    )
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Core 9 Only", color = GoldYellow, fontSize = 11.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LazyColumn(
+                    OutlinedButton(
+                        onClick = { enabledSet = AppConfig.DEFAULT_ENABLED_FOOTBALL_LEAGUES },
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
-                        items(EspnFootballService.VERIFIED_COMPETITIONS, key = { it.leagueId }) { comp ->
-                            val isEnabled = config.enabledFootballLeagues.contains(comp.leagueId)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(NavySurface)
-                                    .clickable {
-                                        val updated = if (isEnabled) {
-                                            config.enabledFootballLeagues - comp.leagueId
-                                        } else {
-                                            config.enabledFootballLeagues + comp.leagueId
-                                        }
-                                        onUpdateConfig(config.copy(enabledFootballLeagues = updated))
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = comp.name,
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            color = TextPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                    Text(
-                                        text = "${comp.category} • ID: ${comp.leagueId}",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = if (comp.isNationalTeam) GoldYellow else CyanAccent,
-                                            fontSize = 10.sp
-                                        )
-                                    )
+                        Text("Select All", color = CyanAccent, fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            enabledSet = setOf("esp.1", "esp.2", "arg.1", "mex.1", "por.1", "ned.1", "eng.1", "uefa.champions")
+                        },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
+                        Text("Priority Only", color = GoldYellow, fontSize = 11.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(prioritySlugs, key = { it.first }) { (slug, displayHeader) ->
+                        val isChecked = slug in enabledSet
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(NavySurface)
+                                .clickable {
+                                    enabledSet = if (isChecked) enabledSet - slug else enabledSet + slug
                                 }
-                                Checkbox(
-                                    checked = isEnabled,
-                                    onCheckedChange = { checked ->
-                                        val updated = if (checked) {
-                                            config.enabledFootballLeagues + comp.leagueId
-                                        } else {
-                                            config.enabledFootballLeagues - comp.leagueId
-                                        }
-                                        onUpdateConfig(config.copy(enabledFootballLeagues = updated))
-                                    },
-                                    colors = CheckboxDefaults.colors(checkedColor = CyanAccent, checkmarkColor = Color.Black)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = displayHeader,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                )
+                                Text(
+                                    text = "League ID: $slug",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = TextSecondary,
+                                        fontSize = 10.sp
+                                    )
                                 )
                             }
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    enabledSet = if (checked) enabledSet + slug else enabledSet - slug
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = CyanAccent)
+                            )
                         }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                        Text("Cancel", color = TextSecondary)
+                    }
+                    Button(
+                        onClick = {
+                            onSaveConfig(config.copy(enabledFootballLeagues = enabledSet))
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
+                    ) {
+                        Text("Save & Sync", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1965,7 +2148,9 @@ fun AppSettingsTab(
     }
 }
 
-// MODAL DIALOG: ADD OR EDIT CHANNEL WITH MULTIPLE STREAMS AVAILABLE
+// =========================================================================================
+// MODAL DIALOG: ADD OR EDIT CHANNEL WITH MULTI-STREAMS & CUSTOM HEADERS
+// =========================================================================================
 @Composable
 fun AddChannelModalDialog(
     channelToEdit: SportsChannel? = null,
@@ -1974,19 +2159,22 @@ fun AddChannelModalDialog(
     onCheckUrl: (String, (M3U8CheckResult) -> Unit) -> Unit
 ) {
     var channelName by remember(channelToEdit) { mutableStateOf(channelToEdit?.name ?: "") }
-    var category by remember(channelToEdit) { mutableStateOf(channelToEdit?.category ?: "Sports") }
+    var category by remember(channelToEdit) { mutableStateOf(channelToEdit?.category ?: "Cricket") }
     var logoText by remember(channelToEdit) { mutableStateOf(channelToEdit?.logoText ?: "") }
     var logoUrl by remember(channelToEdit) { mutableStateOf(channelToEdit?.logoUrl ?: "") }
 
-    // Dynamic list of multiple streams
     var streamsList by remember(channelToEdit) {
         mutableStateOf(
             if (channelToEdit != null && channelToEdit.streams.isNotEmpty()) {
                 channelToEdit.streams
             } else {
                 listOf(
-                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
-                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
+                    StreamSource(
+                        name = "SERVER 1 (1080p)",
+                        quality = "1080p",
+                        url = "https://robitv.com/rn/http://45.117.61.162/01_Tsports_HD/tracks-v1a1/mono.m3u8",
+                        isDefault = true
+                    )
                 )
             }
         )
@@ -2004,12 +2192,12 @@ fun AddChannelModalDialog(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(18.dp),
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 item {
                     Text(
-                        text = if (channelToEdit != null) "Edit Channel & Multi-Streams" else "Add Channel & Multi-Streams",
+                        text = if (channelToEdit != null) "Edit Channel & Servers" else "Add Channel & Servers",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
@@ -2022,16 +2210,9 @@ fun AddChannelModalDialog(
                     OutlinedTextField(
                         value = channelName,
                         onValueChange = { channelName = it },
-                        label = { Text("Channel Name (e.g. Willow Cricket)") },
+                        label = { Text("Channel Name (e.g. T Sports HD)") },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = CyanAccent,
-                            unfocusedBorderColor = NavyBorder,
-                            focusedContainerColor = NavySurface,
-                            unfocusedContainerColor = NavySurface
-                        )
+                        singleLine = true
                     )
                 }
 
@@ -2042,30 +2223,26 @@ fun AddChannelModalDialog(
                             onValueChange = { category = it },
                             label = { Text("Category") },
                             modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedBorderColor = CyanAccent,
-                                unfocusedBorderColor = NavyBorder,
-                                focusedContainerColor = NavySurface,
-                                unfocusedContainerColor = NavySurface
-                            )
+                            singleLine = true
                         )
                         OutlinedTextField(
                             value = logoText,
                             onValueChange = { logoText = it },
-                            label = { Text("Logo Badge") },
+                            label = { Text("Short Badge") },
                             modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedBorderColor = CyanAccent,
-                                unfocusedBorderColor = NavyBorder,
-                                focusedContainerColor = NavySurface,
-                                unfocusedContainerColor = NavySurface
-                            )
+                            singleLine = true
                         )
                     }
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = logoUrl,
+                        onValueChange = { logoUrl = it },
+                        label = { Text("Logo Image URL (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
                 }
 
                 item {
@@ -2075,7 +2252,7 @@ fun AddChannelModalDialog(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "MULTIPLE STREAM SERVERS",
+                            text = "STREAM SERVERS (.M3U8)",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = CyanAccent,
@@ -2086,15 +2263,14 @@ fun AddChannelModalDialog(
                             onClick = {
                                 val nextNum = streamsList.size + 1
                                 streamsList = streamsList + StreamSource(
-                                    name = "SERVER $nextNum (FHD)",
-                                    quality = "FHD",
-                                    url = ""
+                                    name = "SERVER $nextNum (1080p)",
+                                    quality = "1080p",
+                                    url = "",
+                                    priorityOrder = nextNum
                                 )
                             }
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("+ Add Stream", color = CyanAccent, fontSize = 12.sp)
+                            Text("+ Add Server", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -2104,6 +2280,8 @@ fun AddChannelModalDialog(
                     var sName by remember(s.id) { mutableStateOf(s.name) }
                     var sQuality by remember(s.id) { mutableStateOf(s.quality) }
                     var sUrl by remember(s.id) { mutableStateOf(s.url) }
+                    var sReferer by remember(s.id) { mutableStateOf(s.referer.orEmpty()) }
+                    var sUserAgent by remember(s.id) { mutableStateOf(s.userAgent.orEmpty()) }
                     var testStatus by remember(s.id) { mutableStateOf<String?>(null) }
 
                     Card(
@@ -2119,25 +2297,32 @@ fun AddChannelModalDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "Stream #${index + 1}",
+                                    text = "Server #${index + 1} ${if (index == 0 || s.isDefault) "(Default)" else ""}",
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        color = TextSecondary,
+                                        color = if (index == 0 || s.isDefault) CyanAccent else TextSecondary,
                                         fontWeight = FontWeight.Bold
                                     )
                                 )
-                                if (streamsList.size > 1) {
-                                    IconButton(
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
                                         onClick = {
-                                            streamsList = streamsList.filterIndexed { i, _ -> i != index }
-                                        },
-                                        modifier = Modifier.size(20.dp)
+                                            streamsList = streamsList.mapIndexed { i, item ->
+                                                item.copy(isDefault = i == index, priorityOrder = if (i == index) 1 else i + 2)
+                                            }.sortedBy { it.priorityOrder }
+                                        }
                                     ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Remove", tint = LiveRed, modifier = Modifier.size(16.dp))
+                                        Text("Pin #1", color = GoldYellow, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    if (streamsList.size > 1) {
+                                        IconButton(
+                                            onClick = { streamsList = streamsList.filterIndexed { i, _ -> i != index } },
+                                            modifier = Modifier.size(22.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = "Remove", tint = LiveRed, modifier = Modifier.size(16.dp))
+                                        }
                                     }
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(4.dp))
 
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(
@@ -2175,71 +2360,35 @@ fun AddChannelModalDialog(
                                 singleLine = true
                             )
 
-                            // Stream Enable, Backup & Priority controls
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    FilterChip(
-                                        selected = s.isEnabled,
-                                        onClick = {
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(isEnabled = !s.isEnabled)
-                                            }
-                                        },
-                                        label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = LiveGreen.copy(alpha = 0.2f),
-                                            selectedLabelColor = LiveGreen
-                                        )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    FilterChip(
-                                        selected = s.isBackup,
-                                        onClick = {
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(isBackup = !s.isBackup)
-                                            }
-                                        },
-                                        label = { Text(if (s.isBackup) "Backup" else "Primary", fontSize = 10.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = GoldYellow.copy(alpha = 0.2f),
-                                            selectedLabelColor = GoldYellow
-                                        )
-                                    )
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(
-                                        onClick = {
-                                            val newPriority = (s.priorityOrder - 1).coerceAtLeast(0)
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(priorityOrder = newPriority)
-                                            }
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
-                                    }
-                                    Text("P:${s.priorityOrder}", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    IconButton(
-                                        onClick = {
-                                            val newPriority = s.priorityOrder + 1
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(priorityOrder = newPriority)
-                                            }
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
-                                    }
-                                }
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = sReferer,
+                                    onValueChange = {
+                                        sReferer = it
+                                        streamsList = streamsList.toMutableList().also { list ->
+                                            list[index] = list[index].copy(referer = it.ifBlank { null })
+                                        }
+                                    },
+                                    label = { Text("Referer (Optional)", fontSize = 10.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = sUserAgent,
+                                    onValueChange = {
+                                        sUserAgent = it
+                                        streamsList = streamsList.toMutableList().also { list ->
+                                            list[index] = list[index].copy(userAgent = it.ifBlank { null })
+                                        }
+                                    },
+                                    label = { Text("User-Agent (Optional)", fontSize = 10.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
                             }
 
-                            // Quick check button
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2259,11 +2408,11 @@ fun AddChannelModalDialog(
                                 TextButton(
                                     onClick = {
                                         onCheckUrl(sUrl) { res ->
-                                            testStatus = if (res.isOnline) "Active (${res.latencyMs}ms)" else "Offline"
+                                            testStatus = if (res.isOnline) "🟢 Active (${res.latencyMs}ms)" else "🔴 Offline"
                                         }
                                     }
                                 ) {
-                                    Text("Check M3U8", color = CyanAccent, fontSize = 11.sp)
+                                    Text("Check M3U8", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2271,30 +2420,26 @@ fun AddChannelModalDialog(
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.weight(1f)
-                        ) {
+                        OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
                             Text("Cancel", color = TextSecondary)
                         }
-
                         Button(
                             onClick = {
-                                if (channelName.isNotBlank() && streamsList.isNotEmpty()) {
+                                if (channelName.isNotBlank()) {
                                     onSaveChannel(
                                         SportsChannel(
                                             id = channelToEdit?.id ?: UUID.randomUUID().toString(),
                                             name = channelName,
                                             category = category,
-                                            logoText = logoText,
+                                            logoText = logoText.ifBlank { channelName.take(4).uppercase() },
                                             logoUrl = logoUrl,
                                             streams = streamsList.filter { it.url.isNotBlank() },
-                                            isFavorite = channelToEdit?.isFavorite ?: false
+                                            isFavorite = channelToEdit?.isFavorite ?: false,
+                                            isEnabled = channelToEdit?.isEnabled ?: true
                                         )
                                     )
                                 }
@@ -2303,7 +2448,7 @@ fun AddChannelModalDialog(
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
                         ) {
-                            Text("Save Channel", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Save & Sync", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -2312,26 +2457,29 @@ fun AddChannelModalDialog(
     }
 }
 
-// MODAL DIALOG: ADD OR EDIT LIVE MATCH WITH MULTIPLE STREAMS AVAILABLE
+// =========================================================================================
+// MODAL DIALOG: ADD OR EDIT MATCH WITH STREAM PINNING, CHANNEL QUICK-PICKER & CUSTOM HEADERS
+// =========================================================================================
 @Composable
 fun AddMatchModalDialog(
     matchToEdit: LiveMatch? = null,
+    availableChannels: List<SportsChannel> = emptyList(),
     onDismiss: () -> Unit,
     onSaveMatch: (LiveMatch) -> Unit,
     onCheckUrl: (String, (M3U8CheckResult) -> Unit) -> Unit
 ) {
-    var tournament by remember(matchToEdit) { mutableStateOf(matchToEdit?.tournament ?: "INTL FOOTBALL • FIFA WORLD CUP QUALIFIERS") }
+    var tournament by remember(matchToEdit) { mutableStateOf(matchToEdit?.tournament ?: "FOOTBALL | LALIGA") }
     var sport by remember(matchToEdit) { mutableStateOf(matchToEdit?.sport ?: SportType.FOOTBALL) }
-    var team1Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Name ?: "Argentina") }
-    var team1Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Code ?: "ARG") }
-    var team1Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1FlagUrl ?: "https://flagcdn.com/w160/ar.png") }
+    var team1Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Name ?: "Real Madrid") }
+    var team1Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1Code ?: "RMA") }
+    var team1Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team1FlagUrl ?: "") }
 
-    var team2Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Name ?: "Brazil") }
-    var team2Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Code ?: "BRA") }
-    var team2Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2FlagUrl ?: "https://flagcdn.com/w160/br.png") }
+    var team2Name by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Name ?: "Barcelona") }
+    var team2Code by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2Code ?: "BAR") }
+    var team2Flag by remember(matchToEdit) { mutableStateOf(matchToEdit?.team2FlagUrl ?: "") }
 
-    var timeOrScore by remember(matchToEdit) { mutableStateOf(matchToEdit?.timeOrScore ?: "2 - 1") }
-    var matchTime by remember(matchToEdit) { mutableStateOf(matchToEdit?.matchTime ?: "Today, 09:00 PM") }
+    var timeOrScore by remember(matchToEdit) { mutableStateOf(matchToEdit?.timeOrScore ?: "LIVE") }
+    var matchTime by remember(matchToEdit) { mutableStateOf(matchToEdit?.matchTime ?: "09:00 PM | Today") }
     var status by remember(matchToEdit) { mutableStateOf(matchToEdit?.status ?: MatchStatus.LIVE) }
 
     var streamsList by remember(matchToEdit) {
@@ -2340,9 +2488,12 @@ fun AddMatchModalDialog(
                 matchToEdit.streams
             } else {
                 listOf(
-                    StreamSource(name = "SERVER 1 (FHD)", quality = "FHD", url = "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8", isDefault = true),
-                    StreamSource(name = "SERVER 2 (HD)", quality = "HD", url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
-                    StreamSource(name = "TAPMAD FHD", quality = "FHD", url = "https://diceyk6a7voy4.cloudfront.net/e78752a1-2e83-43fa-85ae-3d508be29366/hls/de:02b6989d-e714-4227-9c57-a4c1a221a244:playlist.m3u8")
+                    StreamSource(
+                        name = "T Sports HD",
+                        quality = "1080p",
+                        url = "https://robitv.com/rn/http://45.117.61.162/01_Tsports_HD/tracks-v1a1/mono.m3u8",
+                        isDefault = true
+                    )
                 )
             }
         )
@@ -2352,7 +2503,7 @@ fun AddMatchModalDialog(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 16.dp)
+                .padding(vertical = 12.dp)
                 .border(1.dp, CyanAccent, RoundedCornerShape(20.dp)),
             colors = CardDefaults.cardColors(containerColor = NavyDark),
             shape = RoundedCornerShape(20.dp)
@@ -2360,12 +2511,12 @@ fun AddMatchModalDialog(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(18.dp),
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 item {
                     Text(
-                        text = if (matchToEdit != null) "Edit Match & Multiple Streams" else "Add Live Match With Multi-Streams",
+                        text = if (matchToEdit != null) "Pin / Edit Match Streams" else "Add Match With Live Streams",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
@@ -2373,144 +2524,117 @@ fun AddMatchModalDialog(
                         )
                     )
                     Text(
-                        text = "Configure match details, schedule time, automatic country/club flags, and stream servers",
-                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
+                        text = "এই ম্যাচে স্ট্রিম পিন বা পরিবর্তন করলে সাথে সাথে সব ইউজারের অ্যাপে আপডেট হয়ে যাবে।",
+                        style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent, fontSize = 11.sp)
                     )
                 }
 
-                item {
-                    OutlinedTextField(
-                        value = tournament,
-                        onValueChange = { tournament = it },
-                        label = { Text("Tournament / League Header") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                item {
-                    // Team 1
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = team1Name,
-                            onValueChange = {
-                                team1Name = it
-                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
-                                if (resolved.flagUrl.isNotBlank()) {
-                                    team1Code = resolved.code
-                                    team1Flag = resolved.flagUrl
-                                }
-                            },
-                            label = { Text("Team 1 Name") },
-                            modifier = Modifier.weight(1.5f)
-                        )
-                        OutlinedTextField(
-                            value = team1Code,
-                            onValueChange = { team1Code = it },
-                            label = { Text("Code") },
-                            modifier = Modifier.weight(0.8f)
-                        )
-                        OutlinedTextField(
-                            value = team1Flag,
-                            onValueChange = { team1Flag = it },
-                            label = { Text("Flag URL/Emoji") },
-                            modifier = Modifier.weight(1.2f),
-                            singleLine = true
-                        )
-                    }
-                }
-
-                item {
-                    // Team 2
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = team2Name,
-                            onValueChange = {
-                                team2Name = it
-                                val resolved = com.example.data.util.TeamFlagResolver.resolve(it)
-                                if (resolved.flagUrl.isNotBlank()) {
-                                    team2Code = resolved.code
-                                    team2Flag = resolved.flagUrl
-                                }
-                            },
-                            label = { Text("Team 2 Name") },
-                            modifier = Modifier.weight(1.5f)
-                        )
-                        OutlinedTextField(
-                            value = team2Code,
-                            onValueChange = { team2Code = it },
-                            label = { Text("Code") },
-                            modifier = Modifier.weight(0.8f)
-                        )
-                        OutlinedTextField(
-                            value = team2Flag,
-                            onValueChange = { team2Flag = it },
-                            label = { Text("Flag URL/Emoji") },
-                            modifier = Modifier.weight(1.2f),
-                            singleLine = true
-                        )
-                    }
-                }
-
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = timeOrScore,
-                            onValueChange = { timeOrScore = it },
-                            label = { Text("Score / Countdown") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = matchTime,
-                            onValueChange = { matchTime = it },
-                            label = { Text("Match Time / Date") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                    }
-                }
-
-                item {
-                    // Sport & Status Selector Row
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Quick 1-Tap Channel Stream Pin Bar
+                if (availableChannels.isNotEmpty()) {
+                    item {
                         Text(
-                            text = "SPORT & MATCH STATUS",
+                            text = "⚡ 1-TAP ATTACH CHANNEL TO THIS MATCH:",
                             style = MaterialTheme.typography.labelSmall.copy(
+                                color = GoldYellow,
                                 fontWeight = FontWeight.Bold,
-                                color = TextSecondary,
                                 fontSize = 10.sp
                             )
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            SportType.values().filter { it != SportType.ALL }.forEach { sType ->
-                                FilterChip(
-                                    selected = sport == sType,
-                                    onClick = { sport = sType },
-                                    label = { Text(sType.displayName, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
-                                        selectedLabelColor = CyanAccent
-                                    )
+                            availableChannels.forEach { ch ->
+                                val firstStream = ch.streams.firstOrNull() ?: return@forEach
+                                AssistChip(
+                                    onClick = {
+                                        val pinned = firstStream.copy(
+                                            id = UUID.randomUUID().toString(),
+                                            name = "${ch.name} (${firstStream.quality})",
+                                            isDefault = true,
+                                            priorityOrder = 1
+                                        )
+                                        streamsList = listOf(pinned) + streamsList.mapIndexed { idx, old ->
+                                            old.copy(isDefault = false, priorityOrder = idx + 2)
+                                        }
+                                    },
+                                    label = { Text("+ ${ch.name}", fontSize = 11.sp, color = Color.White) },
+                                    colors = AssistChipDefaults.assistChipColors(containerColor = NavySurface)
                                 )
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            MatchStatus.values().forEach { st ->
-                                FilterChip(
-                                    selected = status == st,
-                                    onClick = { status = st },
-                                    label = { Text(st.name, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = if (st == MatchStatus.LIVE) LiveRed.copy(alpha = 0.2f) else GoldYellow.copy(alpha = 0.2f),
-                                        selectedLabelColor = if (st == MatchStatus.LIVE) LiveRed else GoldYellow
-                                    )
+                    }
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = tournament,
+                        onValueChange = { tournament = it },
+                        label = { Text("Tournament Header (e.g. FOOTBALL | LALIGA)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = team1Name,
+                            onValueChange = {
+                                team1Name = it
+                                val resolved = TeamFlagResolver.resolve(it)
+                                if (resolved.flagUrl.isNotBlank()) {
+                                    team1Code = resolved.code
+                                    team1Flag = resolved.flagUrl
+                                }
+                            },
+                            label = { Text("Team 1") },
+                            modifier = Modifier.weight(1.4f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = team2Name,
+                            onValueChange = {
+                                team2Name = it
+                                val resolved = TeamFlagResolver.resolve(it)
+                                if (resolved.flagUrl.isNotBlank()) {
+                                    team2Code = resolved.code
+                                    team2Flag = resolved.flagUrl
+                                }
+                            },
+                            label = { Text("Team 2") },
+                            modifier = Modifier.weight(1.4f),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SportType.values().filter { it == SportType.CRICKET || it == SportType.FOOTBALL }.forEach { sType ->
+                            FilterChip(
+                                selected = sport == sType,
+                                onClick = { sport = sType },
+                                label = { Text(sType.displayName, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
+                                    selectedLabelColor = CyanAccent
                                 )
-                            }
+                            )
+                        }
+                        MatchStatus.values().filter { it != MatchStatus.UNKNOWN }.forEach { st ->
+                            FilterChip(
+                                selected = status == st,
+                                onClick = { status = st },
+                                label = { Text(st.name, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = if (st == MatchStatus.LIVE) LiveRed.copy(alpha = 0.2f) else GoldYellow.copy(alpha = 0.2f),
+                                    selectedLabelColor = if (st == MatchStatus.LIVE) LiveRed else GoldYellow
+                                )
+                            )
                         }
                     }
                 }
@@ -2522,7 +2646,7 @@ fun AddMatchModalDialog(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "MULTIPLE STREAMS AVAILABLE",
+                            text = "MATCH SERVERS (${streamsList.size})",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = CyanAccent,
@@ -2532,16 +2656,18 @@ fun AddMatchModalDialog(
                         TextButton(
                             onClick = {
                                 val nextNum = streamsList.size + 1
-                                streamsList = streamsList + StreamSource(
-                                    name = "SERVER $nextNum (FHD)",
-                                    quality = "FHD",
-                                    url = ""
-                                )
+                                streamsList = listOf(
+                                    StreamSource(
+                                        name = "SERVER $nextNum (1080p)",
+                                        quality = "1080p",
+                                        url = "",
+                                        isDefault = false,
+                                        priorityOrder = nextNum
+                                    )
+                                ) + streamsList
                             }
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("+ Add Stream", color = CyanAccent, fontSize = 12.sp)
+                            Text("+ Add New .m3u8", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -2551,12 +2677,14 @@ fun AddMatchModalDialog(
                     var sName by remember(s.id) { mutableStateOf(s.name) }
                     var sQuality by remember(s.id) { mutableStateOf(s.quality) }
                     var sUrl by remember(s.id) { mutableStateOf(s.url) }
+                    var sReferer by remember(s.id) { mutableStateOf(s.referer.orEmpty()) }
+                    var sUserAgent by remember(s.id) { mutableStateOf(s.userAgent.orEmpty()) }
                     var testStatus by remember(s.id) { mutableStateOf<String?>(null) }
 
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, NavyBorder, RoundedCornerShape(10.dp)),
+                            .border(1.dp, if (index == 0 || s.isDefault) CyanAccent else NavyBorder, RoundedCornerShape(10.dp)),
                         colors = CardDefaults.cardColors(containerColor = NavySurface)
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
@@ -2565,16 +2693,35 @@ fun AddMatchModalDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Stream Server #${index + 1}", style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
-                                if (streamsList.size > 1) {
-                                    IconButton(
-                                        onClick = { streamsList = streamsList.filterIndexed { i, _ -> i != index } },
-                                        modifier = Modifier.size(20.dp)
+                                Text(
+                                    text = "Server #${index + 1} ${if (index == 0 || s.isDefault) "★ DEFAULT" else ""}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (index == 0 || s.isDefault) CyanAccent else TextSecondary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        onClick = {
+                                            val chosen = streamsList[index].copy(isDefault = true, priorityOrder = 1)
+                                            val others = streamsList.filterIndexed { i, _ -> i != index }
+                                                .mapIndexed { idx, item -> item.copy(isDefault = false, priorityOrder = idx + 2) }
+                                            streamsList = listOf(chosen) + others
+                                        }
                                     ) {
-                                        Icon(Icons.Default.Close, contentDescription = null, tint = LiveRed, modifier = Modifier.size(16.dp))
+                                        Text("📌 Pin #1", color = GoldYellow, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    if (streamsList.size > 1) {
+                                        IconButton(
+                                            onClick = { streamsList = streamsList.filterIndexed { i, _ -> i != index } },
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = null, tint = LiveRed, modifier = Modifier.size(16.dp))
+                                        }
                                     }
                                 }
                             }
+
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(
                                     value = sName,
@@ -2597,6 +2744,9 @@ fun AddMatchModalDialog(
                                     singleLine = true
                                 )
                             }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
                             OutlinedTextField(
                                 value = sUrl,
                                 onValueChange = {
@@ -2607,68 +2757,34 @@ fun AddMatchModalDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
-                            // Stream Enable, Backup & Priority controls
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    FilterChip(
-                                        selected = s.isEnabled,
-                                        onClick = {
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(isEnabled = !s.isEnabled)
-                                            }
-                                        },
-                                        label = { Text(if (s.isEnabled) "Enabled" else "Disabled", fontSize = 10.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = LiveGreen.copy(alpha = 0.2f),
-                                            selectedLabelColor = LiveGreen
-                                        )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    FilterChip(
-                                        selected = s.isBackup,
-                                        onClick = {
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(isBackup = !s.isBackup)
-                                            }
-                                        },
-                                        label = { Text(if (s.isBackup) "Backup" else "Primary", fontSize = 10.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = GoldYellow.copy(alpha = 0.2f),
-                                            selectedLabelColor = GoldYellow
-                                        )
-                                    )
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(
-                                        onClick = {
-                                            val newPriority = (s.priorityOrder - 1).coerceAtLeast(0)
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(priorityOrder = newPriority)
-                                            }
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
-                                    }
-                                    Text("P:${s.priorityOrder}", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    IconButton(
-                                        onClick = {
-                                            val newPriority = s.priorityOrder + 1
-                                            streamsList = streamsList.toMutableList().also { list ->
-                                                list[index] = list[index].copy(priorityOrder = newPriority)
-                                            }
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower Priority", tint = CyanAccent, modifier = Modifier.size(16.dp))
-                                    }
-                                }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = sReferer,
+                                    onValueChange = {
+                                        sReferer = it
+                                        streamsList = streamsList.toMutableList().also { list ->
+                                            list[index] = list[index].copy(referer = it.ifBlank { null })
+                                        }
+                                    },
+                                    label = { Text("Referer (Optional)", fontSize = 10.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = sUserAgent,
+                                    onValueChange = {
+                                        sUserAgent = it
+                                        streamsList = streamsList.toMutableList().also { list ->
+                                            list[index] = list[index].copy(userAgent = it.ifBlank { null })
+                                        }
+                                    },
+                                    label = { Text("User-Agent (Optional)", fontSize = 10.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
                             }
 
                             Row(
@@ -2690,11 +2806,11 @@ fun AddMatchModalDialog(
                                 TextButton(
                                     onClick = {
                                         onCheckUrl(sUrl) { res ->
-                                            testStatus = if (res.isOnline) "Active (${res.latencyMs}ms)" else "Offline"
+                                            testStatus = if (res.isOnline) "🟢 Active (${res.latencyMs}ms)" else "🔴 Offline"
                                         }
                                     }
                                 ) {
-                                    Text("Check M3U8", color = CyanAccent, fontSize = 11.sp)
+                                    Text("Check M3U8", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2702,24 +2818,19 @@ fun AddMatchModalDialog(
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.weight(1f)
-                        ) {
+                        OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
                             Text("Cancel", color = TextSecondary)
                         }
-
                         Button(
                             onClick = {
                                 if (team1Name.isNotBlank() && team2Name.isNotBlank()) {
                                     val isNat = matchToEdit?.isNationalTeam ?: (sport == SportType.CRICKET)
-                                    val v1 = com.example.data.util.TeamFlagResolver.resolveForMatch(team1Name, team1Code, team1Flag, isNationalTeam = isNat)
-                                    val v2 = com.example.data.util.TeamFlagResolver.resolveForMatch(team2Name, team2Code, team2Flag, isNationalTeam = isNat)
+                                    val v1 = TeamFlagResolver.resolveForMatch(team1Name, team1Code, team1Flag, isNationalTeam = isNat)
+                                    val v2 = TeamFlagResolver.resolveForMatch(team2Name, team2Code, team2Flag, isNationalTeam = isNat)
                                     onSaveMatch(
                                         LiveMatch(
                                             id = matchToEdit?.id ?: UUID.randomUUID().toString(),
@@ -2751,7 +2862,7 @@ fun AddMatchModalDialog(
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
                         ) {
-                            Text("Save Match", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Save & Sync Users", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

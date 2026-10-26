@@ -85,7 +85,8 @@ data class AppConfig(
     val footballSyncEnabled: Boolean = true,
     val cricketSyncEnabled: Boolean = true,
     val autoRefreshIntervalSec: Int = 30,
-    val enabledFootballLeagues: Set<String> = DEFAULT_ENABLED_FOOTBALL_LEAGUES
+    val enabledFootballLeagues: Set<String> = DEFAULT_ENABLED_FOOTBALL_LEAGUES,
+    val customM3uBlock: String = ""
 ) {
     companion object {
         val DEFAULT_ENABLED_FOOTBALL_LEAGUES: Set<String> = setOf(
@@ -134,6 +135,7 @@ data class AppConfig(
             "aus.1",
             "ind.1",
             "eng.fa",
+            "esp.2",
             "esp.copa_del_rey",
             "ita.coppa_italia",
             "ger.dfb_pokal",
@@ -150,6 +152,19 @@ data class M3U8CheckResult(
     val contentType: String = "",
     val isHlsStream: Boolean = false,
     val message: String = ""
+)
+
+data class BulkM3uScanItem(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val url: String,
+    val category: String = "Sports",
+    val quality: String = "1080p",
+    val logoUrl: String = "",
+    val userAgent: String? = null,
+    val referer: String? = null,
+    val autoMatchedTarget: String = "Sports • All Live Events",
+    val checkResult: M3U8CheckResult? = null
 )
 
 data class CricketScorecard(

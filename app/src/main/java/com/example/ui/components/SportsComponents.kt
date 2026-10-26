@@ -59,7 +59,7 @@ fun TopSportsBar(
     onCloseSearch: () -> Unit = {}
 ) {
     Surface(
-        color = NavyDark,
+        color = Color(0xFF0B111E),
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
@@ -68,7 +68,7 @@ fun TopSportsBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
@@ -77,8 +77,15 @@ fun TopSportsBar(
                     modifier = Modifier
                         .weight(1f)
                         .testTag("search_input"),
-                    placeholder = { Text("Search matches, channels...", color = TextSecondary) },
+                    placeholder = {
+                        Text(
+                            "Search matches, leagues, channels...",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
@@ -87,6 +94,14 @@ fun TopSportsBar(
                         focusedContainerColor = NavySurface,
                         unfocusedContainerColor = NavySurface
                     ),
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = CyanAccent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
                     trailingIcon = {
                         IconButton(onClick = onCloseSearch) {
                             Icon(Icons.Default.Close, contentDescription = "Close search", tint = TextSecondary)
@@ -98,47 +113,55 @@ fun TopSportsBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        fontSize = 22.sp
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        fontSize = 20.sp
                     )
                 )
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // Telegram community button
+                    // Telegram community circle button (cyan circle with purple/magenta border ring matching screenshot)
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(30.dp)
                             .clip(CircleShape)
-                            .background(NavySurfaceVariant)
+                            .background(Color(0xFF28A8E9))
+                            .border(
+                                width = 1.8.dp,
+                                brush = Brush.linearGradient(
+                                    colors = listOf(Color(0xFFA855F7), Color(0xFFEC4899))
+                                ),
+                                shape = CircleShape
+                            )
                             .clickable(onClick = onTelegramClick)
                             .testTag("telegram_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Share,
+                            Icons.Default.Send,
                             contentDescription = "Telegram",
-                            tint = CyanAccent,
-                            modifier = Modifier.size(20.dp)
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(15.dp)
+                                .offset(x = (-1).dp, y = 0.dp)
                         )
                     }
 
-                    // Refresh button
+                    // Compact Refresh icon button
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(32.dp)
                             .clip(CircleShape)
-                            .background(NavySurfaceVariant)
                             .clickable(onClick = onRefreshClick)
                             .testTag("refresh_button"),
                         contentAlignment = Alignment.Center
@@ -146,17 +169,16 @@ fun TopSportsBar(
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "Refresh",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(20.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    // Search button
+                    // Compact Search icon button
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(32.dp)
                             .clip(CircleShape)
-                            .background(NavySurfaceVariant)
                             .clickable(onClick = onSearchClick)
                             .testTag("search_button"),
                         contentAlignment = Alignment.Center
@@ -164,8 +186,8 @@ fun TopSportsBar(
                         Icon(
                             Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(20.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
@@ -588,19 +610,11 @@ fun MatchCard(
         }
     }
 
-    val team1Display = remember(match.team1Name, match.team1Code, match.isNationalTeam) {
-        if (!match.isNationalTeam) {
-            match.team1Name.ifBlank { match.team1Code }
-        } else {
-            match.team1Code.ifBlank { match.team1Name }
-        }
+    val team1Display = remember(match.team1Name, match.team1Code, team1Visual.countryName) {
+        match.team1Name.ifBlank { team1Visual.countryName }.ifBlank { match.team1Code }
     }
-    val team2Display = remember(match.team2Name, match.team2Code, match.isNationalTeam) {
-        if (!match.isNationalTeam) {
-            match.team2Name.ifBlank { match.team2Code }
-        } else {
-            match.team2Code.ifBlank { match.team2Name }
-        }
+    val team2Display = remember(match.team2Name, match.team2Code, team2Visual.countryName) {
+        match.team2Name.ifBlank { team2Visual.countryName }.ifBlank { match.team2Code }
     }
 
     Card(
